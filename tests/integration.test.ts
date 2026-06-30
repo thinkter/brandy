@@ -86,6 +86,24 @@ test("development cache busting preserves server action URLs", async () => {
   expect(action).not.toContain("function");
 });
 
+test("server-only loaders can use filesystem and process APIs", async () => {
+  const app = await createBrandy({ appDir });
+  const response = await app.handle(new Request("http://localhost/server"));
+  const html = await response.text();
+  expect(response.status).toBe(200);
+  expect(html).toContain(`Bun ${Bun.version}`);
+  expect(html).toContain("node:fs/promises");
+  expect(html).toContain("Functions that never reach the browser");
+});
+
+test("shared server components compose into route output", async () => {
+  const app = await createBrandy({ appDir });
+  const html = await (await app.handle(new Request("http://localhost/components"))).text();
+  expect(html).toContain("Reusable server-rendered TSX");
+  expect(html).toContain("Server component");
+  expect(html).toContain("x-on:click");
+});
+
 test("dynamic params feed loaders and loader metadata", async () => {
   const app = await createBrandy({ appDir });
   const response = await app.handle(new Request("http://localhost/dashboard/users/42"));

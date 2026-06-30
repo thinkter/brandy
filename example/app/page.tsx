@@ -36,6 +36,19 @@ export default function Home({ data }: { data: HomeData }) {
         </a>
       </div>
 
+      <div class="mt-6 grid gap-4 sm:grid-cols-2">
+        <a class="rounded-xl border border-zinc-800 bg-zinc-900/40 p-5 no-underline transition hover:border-zinc-600" href="/server">
+          <span class="text-xs font-semibold uppercase tracking-wider text-amber-400">Server functions</span>
+          <strong class="mt-2 block text-lg">Use filesystem and process APIs</strong>
+          <span class="mt-2 block text-sm leading-6 text-zinc-400">Run async Node and Bun code in loaders without shipping it to the browser.</span>
+        </a>
+        <a class="rounded-xl border border-zinc-800 bg-zinc-900/40 p-5 no-underline transition hover:border-zinc-600" href="/components">
+          <span class="text-xs font-semibold uppercase tracking-wider text-amber-400">Components</span>
+          <strong class="mt-2 block text-lg">Compose reusable server TSX</strong>
+          <span class="mt-2 block text-sm leading-6 text-zinc-400">Share typed UI primitives and add Alpine only where interaction is needed.</span>
+        </a>
+      </div>
+
       <div class="mt-12 grid gap-6 md:grid-cols-2">
         <section class="rounded border border-zinc-800 bg-zinc-900/30 p-5">
           <p class="text-sm font-semibold">Server-side data</p>
