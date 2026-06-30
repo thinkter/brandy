@@ -10,6 +10,7 @@ export default function DashboardLayout({ children }: { children: JSX.Element })
         <a href="/dashboard">Overview</a>
         <a href="/dashboard/settings">Settings</a>
         <a href="/dashboard/users/42">User 42</a>
+        <a href="/dashboard/analytics">Analytics</a>
       </nav>
       {children}
     </main>
