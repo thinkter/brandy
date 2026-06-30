@@ -1,5 +1,6 @@
 import type {} from "./alpine-jsx.d.ts";
 import { Elysia } from "elysia";
+import { isAbsolute, relative, resolve, sep } from "node:path";
 import { isRevalidation } from "./core/control.ts";
 import { matchRoute } from "./core/diff.ts";
 import { escapeAttribute, normalizePathname, slotId } from "./core/path.ts";
@@ -128,6 +129,7 @@ export async function createBrandy(options: BrandyOptions): Promise<Elysia> {
   const clientPath = options.clientPath ?? "/_brandy/runtime.js";
   const runtime = options.runtime ?? await compiledRuntime(options.alpine !== false);
   const trustedOrigins = normalizeTrustedOrigins(options.trustedOrigins ?? []);
+  const publicDir = options.publicDir ? resolve(options.publicDir) : undefined;
   const app = new Elysia();
 
   if (options.setup) await options.setup(app);
@@ -172,9 +174,14 @@ export async function createBrandy(options: BrandyOptions): Promise<Elysia> {
 
   app.get("/*", async ({ request, set }) => {
     const publicPath = decodeURIComponent(new URL(request.url).pathname);
-    if (options.publicDir && !publicPath.startsWith("/_brandy/") && !publicPath.includes("..")) {
-      const file = Bun.file(`${options.publicDir}${publicPath}`);
-      if (await file.exists()) return new Response(file);
+    if (publicDir && !publicPath.startsWith("/_brandy/")) {
+      const filePath = resolve(publicDir, publicPath.slice(1));
+      const relativePath = relative(publicDir, filePath);
+      const isWithinPublicDir = relativePath !== ".." && !relativePath.startsWith(`..${sep}`) && !isAbsolute(relativePath);
+      if (isWithinPublicDir) {
+        const file = Bun.file(filePath);
+        if (await file.exists()) return new Response(file);
+      }
     }
     const targetPath = normalizePathname(request.url);
     const targetResult = resolveMatch(manifest, targetPath);

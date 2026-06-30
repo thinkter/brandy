@@ -1,4 +1,7 @@
 import { expect, test } from "bun:test";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { buildManifest, createBrandy } from "brandy";
 
 const appDir = new URL("../example/app", import.meta.url).pathname;
@@ -22,6 +25,34 @@ test("framework assets are injected without an application server bootstrap", as
   expect(html).toContain('src="/_brandy/dev.js"');
   const css = await app.handle(new Request("http://localhost/_brandy/app.css"));
   expect(await css.text()).toBe("body{color:red}");
+});
+
+test("public assets stay contained within publicDir", async () => {
+  const root = await mkdtemp(join(tmpdir(), "brandy-public-"));
+  const publicDir = join(root, "public");
+  await mkdir(join(publicDir, "nested"), { recursive: true });
+  await Promise.all([
+    Bun.write(join(publicDir, "nested", "asset.txt"), "public asset"),
+    Bun.write(join(publicDir, "asset..txt"), "safe dotted asset"),
+    Bun.write(join(root, "secret.txt"), "private sibling file"),
+  ]);
+
+  try {
+    const app = await createBrandy({ appDir, publicDir });
+    const nested = await app.handle(new Request("http://localhost/nested/asset.txt"));
+    expect(nested.status).toBe(200);
+    expect(await nested.text()).toBe("public asset");
+
+    const dotted = await app.handle(new Request("http://localhost/asset..txt"));
+    expect(dotted.status).toBe(200);
+    expect(await dotted.text()).toBe("safe dotted asset");
+
+    const traversal = await app.handle(new Request("http://localhost/%2e%2e%2fsecret.txt"));
+    expect(traversal.status).toBe(404);
+    expect(await traversal.text()).not.toContain("private sibling file");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("development refresh can replace a nested layout boundary", async () => {
