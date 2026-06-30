@@ -15,6 +15,7 @@ export const RETARGET_HEADER = "x-brandy-retarget";
 export const RESWAP_HEADER = "x-brandy-reswap";
 export const TARGET_URL_HEADER = "x-brandy-url";
 export const REFRESH_BOUNDARY_HEADER = "x-brandy-refresh-boundary";
+export const PREFETCH_HEADER = "x-brandy-prefetch";
 
 export interface BrandyOptions {
   appDir?: string;
