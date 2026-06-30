@@ -8,6 +8,7 @@ export interface BrandyConfig {
   alpine?: boolean;
   port?: number;
   host?: string;
+  trustedOrigins?: string[];
   setup?: (app: Elysia) => void | Promise<void>;
 }
 

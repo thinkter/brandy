@@ -161,7 +161,7 @@ test("colocated actions mutate and revalidate a fragment", async () => {
   expect(action).toStartWith("/_brandy/actions/");
   const response = await app.handle(new Request(`http://localhost${action}`, {
     method: "POST",
-    headers: { "x-brandy-navigation": "1", "x-brandy-current-url": "/dashboard" },
+    headers: { origin: "http://localhost", "x-brandy-navigation": "1", "x-brandy-current-url": "/dashboard" },
     body: new FormData(),
   }));
   const html = await response.text();
@@ -174,7 +174,50 @@ test("no-JS actions use a 303 full-navigation fallback", async () => {
   const app = await createBrandy({ appDir });
   const page = await (await app.handle(new Request("http://localhost/dashboard"))).text();
   const action = page.match(/<form[^>]+action="([^"]+)"/)?.[1];
-  const response = await app.handle(new Request(`http://localhost${action}`, { method: "POST", body: new FormData() }));
+  const response = await app.handle(new Request(`http://localhost${action}`, {
+    method: "POST", headers: { referer: "http://localhost/dashboard" }, body: new FormData(),
+  }));
   expect(response.status).toBe(303);
   expect(response.headers.get("location")).toBe("http://localhost/dashboard");
+});
+
+test("actions reject untrusted or unverifiable request origins", async () => {
+  const app = await createBrandy({ appDir });
+  const before = await (await app.handle(new Request("http://localhost/dashboard"))).text();
+  const count = Number(before.match(/Count: (\d+)/)?.[1]);
+  const action = before.match(/<form[^>]+action="([^"]+)"/)?.[1];
+  const headers: Array<Record<string, string>> = [
+    {},
+    { origin: "https://evil.example" },
+    { origin: "https://localhost" },
+    { origin: "http://localhost:3000" },
+    { origin: "http://sub.localhost" },
+    { origin: "null" },
+    { origin: "not a URL", referer: "http://localhost/dashboard" },
+    { referer: "not a URL" },
+  ];
+  for (const sourceHeaders of headers) {
+    const response = await app.handle(new Request(`http://localhost${action}`, {
+      method: "POST", headers: sourceHeaders, body: new FormData(),
+    }));
+    expect(response.status).toBe(403);
+    expect(await response.text()).toBe("Forbidden");
+  }
+  const after = await (await app.handle(new Request("http://localhost/dashboard"))).text();
+  expect(after).toContain(`Count: ${count}`);
+});
+
+test("trusted origins can submit actions", async () => {
+  const app = await createBrandy({ appDir, trustedOrigins: ["https://admin.example.com/"] });
+  const page = await (await app.handle(new Request("http://localhost/dashboard"))).text();
+  const action = page.match(/<form[^>]+action="([^"]+)"/)?.[1];
+  const response = await app.handle(new Request(`http://localhost${action}`, {
+    method: "POST", headers: { origin: "https://admin.example.com" }, body: new FormData(),
+  }));
+  expect(response.status).toBe(303);
+});
+
+test("trusted origins must be absolute HTTP(S) origins", async () => {
+  await expect(createBrandy({ appDir, trustedOrigins: ["https://example.com/path"] })).rejects.toThrow("Invalid trusted origin");
+  await expect(createBrandy({ appDir, trustedOrigins: ["ftp://example.com"] })).rejects.toThrow("Invalid trusted origin");
 });

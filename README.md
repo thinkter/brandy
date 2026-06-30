@@ -39,11 +39,15 @@ import { defineConfig } from "brandy/config"
 
 export default defineConfig({
   alpine: true,
+  // Optional exact origins allowed to submit server actions in addition to this deployment's origin.
+  trustedOrigins: ["https://admin.example.com"],
   setup(app) {
     app.get("/api/health", () => ({ ok: true }))
   },
 })
 ```
+
+Server actions reject POSTs whose `Origin` (or, when absent, `Referer`) does not match the request origin. They also reject requests without either header. `trustedOrigins` is empty by default; add only exact HTTP(S) origins that should be allowed to submit actions.
 
 When `styles.css` exists, Brandy compiles it with Tailwind and injects the stylesheet automatically. Files under `public/` are served from root-relative URLs.
 

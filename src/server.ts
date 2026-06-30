@@ -26,6 +26,29 @@ export interface BrandyOptions {
   setup?: BrandyConfig["setup"];
   runtime?: string;
   cacheBust?: string;
+  trustedOrigins?: string[];
+}
+
+function normalizeTrustedOrigins(values: string[]): Set<string> {
+  return new Set(values.map((value) => {
+    let url: URL;
+    try { url = new URL(value); }
+    catch { throw new Error(`Invalid trusted origin: ${JSON.stringify(value)}`); }
+    if ((url.protocol !== "http:" && url.protocol !== "https:") || url.username || url.password || url.pathname !== "/" || url.search || url.hash) {
+      throw new Error(`Invalid trusted origin: ${JSON.stringify(value)}. Expected an HTTP(S) origin without a path, query, or fragment.`);
+    }
+    return url.origin;
+  }));
+}
+
+function actionSourceOrigin(request: Request): string | undefined {
+  const value = request.headers.get("origin") ?? request.headers.get("referer");
+  if (!value || value === "null") return undefined;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return undefined;
+    return url.origin;
+  } catch { return undefined; }
 }
 
 function cacheNotFoundRoute(manifest: RouteManifest): Route {
@@ -104,6 +127,7 @@ export async function createBrandy(options: BrandyOptions): Promise<Elysia> {
   cacheNotFoundRoute(manifest);
   const clientPath = options.clientPath ?? "/_brandy/runtime.js";
   const runtime = options.runtime ?? await compiledRuntime(options.alpine !== false);
+  const trustedOrigins = normalizeTrustedOrigins(options.trustedOrigins ?? []);
   const app = new Elysia();
 
   if (options.setup) await options.setup(app);
@@ -117,6 +141,11 @@ export async function createBrandy(options: BrandyOptions): Promise<Elysia> {
   }));
 
   app.post("/_brandy/actions/*", async ({ request, set }) => {
+    const sourceOrigin = actionSourceOrigin(request);
+    const requestOrigin = new URL(request.url).origin;
+    if (!sourceOrigin || sourceOrigin !== requestOrigin && !trustedOrigins.has(sourceOrigin)) {
+      return new Response("Forbidden", { status: 403 });
+    }
     const actionPath = new URL(request.url).pathname;
     const action = manifest.actions.get(actionPath);
     if (!action) { set.status = 404; return "Unknown action"; }

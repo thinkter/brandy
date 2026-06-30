@@ -30,6 +30,7 @@ export async function loadConfig(root = process.cwd(), version?: string): Promis
     publicDir: value.publicDir === false ? false : path(value.publicDir ?? "public"),
     styles: value.styles === false ? false : path(value.styles ?? "styles.css"),
     alpine: value.alpine ?? true, port: value.port ?? 3000, host: value.host ?? "localhost",
+    trustedOrigins: value.trustedOrigins ?? [],
     setup: value.setup, configFile,
   };
 }

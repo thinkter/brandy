@@ -86,7 +86,7 @@ function registerAction(id,path,segmentPath,file,name,handler){Object.defineProp
 ${actions.join(";\n")}
 const manifest={appDir:${JSON.stringify(config.appDir)},routes:[${routes.join(",\n")}],actions,rootNotFound:${rootNotFoundModule ? `${rootNotFoundModule}.default` : "undefined"}};
 const config=${config.configFile ? `${imported(config.configFile)}.default ?? {}` : "{}"};
-const app=await createBrandy({manifest,alpine:${config.alpine},runtime:${JSON.stringify(runtime)},stylesheet:${JSON.stringify(styles)},publicDir:${JSON.stringify(join(config.outDir, "public"))},setup:config.setup});
+const app=await createBrandy({manifest,alpine:${config.alpine},runtime:${JSON.stringify(runtime)},stylesheet:${JSON.stringify(styles)},publicDir:${JSON.stringify(join(config.outDir, "public"))},trustedOrigins:config.trustedOrigins,setup:config.setup});
 app.listen({port:Number(process.env.PORT)||${config.port},hostname:process.env.HOST||${JSON.stringify(config.host)}});
 console.log(\`Brandy listening at \${app.server?.url}\`);
 `;
