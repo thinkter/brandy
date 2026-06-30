@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { createBrandy } from "brandy";
+import { buildManifest, createBrandy } from "brandy";
 
 const appDir = new URL("../example/app", import.meta.url).pathname;
 
@@ -142,10 +142,15 @@ test("loader failures use the nearest error boundary", async () => {
 });
 
 test("unknown URLs render the explicit 404 route", async () => {
-  const app = await createBrandy({ appDir });
+  const manifest = await buildManifest(appDir);
+  const app = await createBrandy({ manifest });
+  const cachedRoute = manifest.notFoundRoute;
   const response = await app.handle(new Request("http://localhost/does-not-exist"));
   expect(response.status).toBe(404);
   expect(await response.text()).toContain("explicit 404 route");
+  await app.handle(new Request("http://localhost/still-does-not-exist"));
+  expect(manifest.notFoundRoute).toBe(cachedRoute);
+  expect(cachedRoute).toBe(manifest.routes.find((route) => route.pattern === "/404"));
 });
 
 test("colocated actions mutate and revalidate a fragment", async () => {

@@ -94,6 +94,8 @@ export interface RouteManifest {
   routes: Route[];
   actions: Map<string, ActionDefinition>;
   rootNotFound?: NotFoundRenderer;
+  /** The route used for unmatched URLs, initialized once when the server starts. */
+  notFoundRoute?: Route;
 }
 
 export interface RouteMatch {

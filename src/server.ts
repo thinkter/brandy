@@ -28,9 +28,10 @@ export interface BrandyOptions {
   cacheBust?: string;
 }
 
-function notFoundMatch(manifest: RouteManifest, pathname: string): RouteMatch {
+function cacheNotFoundRoute(manifest: RouteManifest): Route {
+  if (manifest.notFoundRoute) return manifest.notFoundRoute;
   const explicit = manifest.routes.find((route) => route.pattern === "/404");
-  if (explicit) return { route: explicit, pathname, params: {} };
+  if (explicit) return manifest.notFoundRoute = explicit;
   const root = manifest.routes[0]!.layouts[0]!;
   const renderNotFound = manifest.rootNotFound ?? (() => "<main><h1>Not found</h1></main>");
   const page: PageNode = {
@@ -38,17 +39,18 @@ function notFoundMatch(manifest: RouteManifest, pathname: string): RouteMatch {
     render: renderNotFound, renderNotFound,
   };
   const route: Route = {
-    id: "/404", pattern: pathname, segments: pathname === "/" ? [] : pathname.slice(1).split("/"),
+    id: "/404", pattern: "/404", segments: ["404"],
     layouts: [root], page, pageFile: page.file, renderPage: page.render,
   };
-  return { route, pathname, params: {} };
+  manifest.notFoundRoute = route;
+  return route;
 }
 
 function resolveMatch(manifest: RouteManifest, pathname: string): { match: RouteMatch; missing: boolean } {
   try { return { match: matchRoute(manifest, pathname), missing: false }; }
   catch (error) {
     if (!(error instanceof Error) || !error.message.startsWith("No route matches")) throw error;
-    return { match: notFoundMatch(manifest, pathname), missing: true };
+    return { match: { route: manifest.notFoundRoute!, pathname, params: {} }, missing: true };
   }
 }
 
@@ -99,6 +101,7 @@ function injectDevRuntime(document: string): string {
 
 export async function createBrandy(options: BrandyOptions): Promise<Elysia> {
   const manifest = options.manifest ?? await buildManifest(options.appDir ?? "app", options.cacheBust);
+  cacheNotFoundRoute(manifest);
   const clientPath = options.clientPath ?? "/_brandy/runtime.js";
   const runtime = options.runtime ?? await compiledRuntime(options.alpine !== false);
   const app = new Elysia();
