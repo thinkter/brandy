@@ -126,9 +126,24 @@ Without JavaScript, successful actions redirect with `303` to the revalidated ro
 
 ## Errors and 404s
 
-- `error.tsx` receives `{ error, params, request, url }` and catches loader or render failures at the nearest segment.
+- `error.tsx` receives `{ error, dev, params, request, url }` and catches loader or render failures at the nearest segment.
 - `not-found.tsx` handles `notFound()` outcomes from loaders.
 - `app/404/page.tsx` handles unmatched URLs. If omitted, Brandy emits a minimal built-in 404.
+
+The original error is available to the boundary for server-side logging, so treat its message and stack as sensitive. Only render diagnostic details when `dev` is true; it is false by default and enabled by `brandy dev`:
+
+```tsx
+import type { ErrorContext } from "brandy"
+
+export default function ErrorPage({ error, dev }: ErrorContext) {
+  const message = dev && error instanceof Error
+    ? error.message
+    : "Something went wrong."
+  return <p role="alert">{message}</p>
+}
+```
+
+Do not render `error.message`, `error.stack`, or `String(error)` unconditionally. Production builds explicitly disable development error details.
 
 ## Client state boundary
 

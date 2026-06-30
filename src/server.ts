@@ -130,6 +130,7 @@ export async function createBrandy(options: BrandyOptions): Promise<Elysia> {
   const runtime = options.runtime ?? await compiledRuntime(options.alpine !== false);
   const trustedOrigins = normalizeTrustedOrigins(options.trustedOrigins ?? []);
   const publicDir = options.publicDir ? resolve(options.publicDir) : undefined;
+  const renderOptions = { dev: options.dev === true };
   const app = new Elysia();
 
   if (options.setup) await options.setup(app);
@@ -163,7 +164,7 @@ export async function createBrandy(options: BrandyOptions): Promise<Elysia> {
 
     if (request.headers.get(PARTIAL_HEADER) === "1") {
       const diff = diffMatches(current, target);
-      const rendered = await renderFragmentMatch(diff, targetRequest);
+      const rendered = await renderFragmentMatch(diff, targetRequest, renderOptions);
       set.status = rendered.status;
       set.headers[RETARGET_HEADER] = `#${slotId(diff.boundary.id)}`;
       set.headers[RESWAP_HEADER] = "innerHTML";
@@ -199,7 +200,7 @@ export async function createBrandy(options: BrandyOptions): Promise<Elysia> {
           diff = { current, target: targetResult.match, boundary, chainToRender: targetResult.match.route.layouts.slice(index) };
         }
       }
-      const rendered = await renderFragmentMatch(diff, request);
+      const rendered = await renderFragmentMatch(diff, request, renderOptions);
       set.status = targetResult.missing ? 404 : rendered.status;
       set.headers[RETARGET_HEADER] = `#${slotId(diff.boundary.id)}`;
       set.headers[RESWAP_HEADER] = "innerHTML";
@@ -207,7 +208,7 @@ export async function createBrandy(options: BrandyOptions): Promise<Elysia> {
       set.headers["vary"] = `${PARTIAL_HEADER}, ${CURRENT_URL_HEADER}`;
       return `${rendered.html}${metadataSwap(rendered.metadata)}`;
     }
-    const rendered = await renderFullMatch(targetResult.match, request);
+    const rendered = await renderFullMatch(targetResult.match, request, renderOptions);
     set.status = targetResult.missing ? 404 : rendered.status;
     let document = injectClientRuntime(injectMetadata(rendered.html, rendered.metadata), clientPath);
     if (options.stylesheet) document = injectStylesheet(document, "/_brandy/app.css");

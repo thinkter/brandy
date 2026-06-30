@@ -163,13 +163,30 @@ test("loader notFound uses the nearest not-found boundary", async () => {
   expect(await response.text()).toContain("The requested page does not exist");
 });
 
-test("loader failures use the nearest error boundary", async () => {
+test("production error boundaries hide loader details on full and partial navigation", async () => {
   const app = await createBrandy({ appDir });
   const response = await app.handle(new Request("http://localhost/dashboard/users/error"));
   expect(response.status).toBe(500);
   const html = await response.text();
   expect(html).toContain("Dashboard error");
-  expect(html).toContain("User loader failed");
+  expect(html).toContain("Something went wrong.");
+  expect(html).not.toContain("User loader failed");
+
+  const partial = await app.handle(new Request("http://localhost/dashboard/users/error", { headers: {
+    "x-brandy-navigation": "1",
+    "x-brandy-current-url": "/about",
+  }}));
+  expect(partial.status).toBe(500);
+  const fragment = await partial.text();
+  expect(fragment).toContain("Something went wrong.");
+  expect(fragment).not.toContain("User loader failed");
+});
+
+test("development error boundaries can render loader details", async () => {
+  const app = await createBrandy({ appDir, dev: true });
+  const response = await app.handle(new Request("http://localhost/dashboard/users/error"));
+  expect(response.status).toBe(500);
+  expect(await response.text()).toContain("User loader failed");
 });
 
 test("unknown URLs render the explicit 404 route", async () => {

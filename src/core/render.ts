@@ -2,7 +2,7 @@ import { NotFoundError } from "./control.ts";
 import { escapeAttribute, slotId } from "./path.ts";
 import type {
   LayoutNode, LoadedRoute, Metadata, MetadataExport, PageNode, RenderContext,
-  RenderedRoute, RequestContext, Route, RouteDiff, RouteMatch,
+  RenderedRoute, RenderOptions, RequestContext, Route, RouteDiff, RouteMatch,
 } from "./types.ts";
 
 type RenderNode = LayoutNode | PageNode;
@@ -69,7 +69,7 @@ function nearestRenderer<T extends "renderError" | "renderNotFound">(nodes: Rend
   return undefined;
 }
 
-async function renderPipeline(match: RouteMatch, request: Request, layouts: LayoutNode[]): Promise<RenderedRoute> {
+async function renderPipeline(match: RouteMatch, request: Request, layouts: LayoutNode[], options: RenderOptions = {}): Promise<RenderedRoute> {
   const nodes: RenderNode[] = [...layouts, match.route.page];
   const base = context(match, request);
   try {
@@ -94,7 +94,7 @@ async function renderPipeline(match: RouteMatch, request: Request, layouts: Layo
     }
     const renderer = nearestRenderer(nodes, index, "renderError");
     if (!renderer) throw error;
-    const html = String(await renderer({ ...base, error }));
+    const html = String(await renderer({ ...base, error, dev: options.dev === true }));
     const safeLayouts = layouts.slice(0, Math.min(index, layouts.length));
     const loaded: LoadedRoute = { match, data: new Map(), metadata: {} };
     return { html: await wrap(html, safeLayouts, loaded, request), metadata: {}, status: 500 };
@@ -120,12 +120,12 @@ export function metadataSwap(metadata: Metadata): string {
   return `<template data-brandy-head>${metaTags(metadata)}</template>`;
 }
 
-export async function renderFullMatch(match: RouteMatch, request: Request): Promise<RenderedRoute> {
-  return renderPipeline(match, request, match.route.layouts);
+export async function renderFullMatch(match: RouteMatch, request: Request, options: RenderOptions = {}): Promise<RenderedRoute> {
+  return renderPipeline(match, request, match.route.layouts, options);
 }
 
-export async function renderFragmentMatch(diff: RouteDiff, request: Request): Promise<RenderedRoute> {
-  const rendered = await renderPipeline(diff.target, request, diff.chainToRender);
+export async function renderFragmentMatch(diff: RouteDiff, request: Request, options: RenderOptions = {}): Promise<RenderedRoute> {
+  const rendered = await renderPipeline(diff.target, request, diff.chainToRender, options);
   const sharedCount = diff.target.route.layouts.length - diff.chainToRender.length;
   const sharedStatic = diff.target.route.layouts.slice(0, sharedCount)
     .flatMap((layout) => layout.metadata && typeof layout.metadata !== "function" ? [layout.metadata] : []);

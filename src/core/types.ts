@@ -7,6 +7,15 @@ export interface RequestContext {
   url: URL;
 }
 
+export interface ErrorContext extends RequestContext {
+  error: unknown;
+  dev: boolean;
+}
+
+export interface RenderOptions {
+  dev?: boolean;
+}
+
 export interface RenderContext<T = unknown> extends RequestContext {
   data: T;
 }
@@ -24,7 +33,7 @@ export interface Metadata {
 }
 
 export type MetadataExport<T = unknown> = Metadata | ((context: RenderContext<T>) => Metadata | Promise<Metadata>);
-export type ErrorRenderer = (props: RequestContext & { error: unknown }) => RenderResult;
+export type ErrorRenderer = (props: ErrorContext) => RenderResult;
 export type NotFoundRenderer = (props: RequestContext) => RenderResult;
 
 export interface SegmentModule<T = unknown> {
