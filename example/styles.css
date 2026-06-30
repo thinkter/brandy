@@ -1,0 +1,17 @@
+@import "tailwindcss";
+@source "./app";
+
+@layer base {
+  [x-cloak] {
+    display: none !important;
+  }
+
+  body {
+    @apply bg-zinc-950 text-zinc-100;
+    color-scheme: dark;
+  }
+
+  a {
+    @apply underline-offset-4;
+  }
+}

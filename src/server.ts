@@ -1,70 +1,187 @@
+import type {} from "./alpine-jsx.d.ts";
 import { Elysia } from "elysia";
-import { diffRoutes, matchRoute } from "./core/diff.ts";
-import { normalizePathname, slotId } from "./core/path.ts";
-import { renderFragment, renderFull } from "./core/render.ts";
+import { isRevalidation } from "./core/control.ts";
+import { matchRoute } from "./core/diff.ts";
+import { escapeAttribute, normalizePathname, slotId } from "./core/path.ts";
+import { injectMetadata, metadataSwap, renderFragmentMatch, renderFullMatch } from "./core/render.ts";
+import type { PageNode, Route, RouteManifest, RouteMatch } from "./core/types.ts";
 import { buildManifest } from "./core/walker.ts";
+import type { BrandyConfig } from "./config.ts";
 
 export const PARTIAL_HEADER = "x-brandy-navigation";
 export const CURRENT_URL_HEADER = "x-brandy-current-url";
 export const RETARGET_HEADER = "x-brandy-retarget";
 export const RESWAP_HEADER = "x-brandy-reswap";
+export const TARGET_URL_HEADER = "x-brandy-url";
+export const REFRESH_BOUNDARY_HEADER = "x-brandy-refresh-boundary";
 
 export interface BrandyOptions {
-  appDir: string;
+  appDir?: string;
+  manifest?: RouteManifest;
   clientPath?: string;
+  alpine?: boolean;
+  stylesheet?: string;
+  publicDir?: string | false;
+  dev?: boolean;
+  setup?: BrandyConfig["setup"];
+  runtime?: string;
+  cacheBust?: string;
+}
+
+function notFoundMatch(manifest: RouteManifest, pathname: string): RouteMatch {
+  const explicit = manifest.routes.find((route) => route.pattern === "/404");
+  if (explicit) return { route: explicit, pathname, params: {} };
+  const root = manifest.routes[0]!.layouts[0]!;
+  const renderNotFound = manifest.rootNotFound ?? (() => "<main><h1>Not found</h1></main>");
+  const page: PageNode = {
+    id: "not-found/page", directory: manifest.appDir, file: "not-found.tsx",
+    render: renderNotFound, renderNotFound,
+  };
+  const route: Route = {
+    id: "/404", pattern: pathname, segments: pathname === "/" ? [] : pathname.slice(1).split("/"),
+    layouts: [root], page, pageFile: page.file, renderPage: page.render,
+  };
+  return { route, pathname, params: {} };
+}
+
+function resolveMatch(manifest: RouteManifest, pathname: string): { match: RouteMatch; missing: boolean } {
+  try { return { match: matchRoute(manifest, pathname), missing: false }; }
+  catch (error) {
+    if (!(error instanceof Error) || !error.message.startsWith("No route matches")) throw error;
+    return { match: notFoundMatch(manifest, pathname), missing: true };
+  }
+}
+
+function diffMatches(current: RouteMatch, target: RouteMatch) {
+  let shared = 0;
+  while (shared < current.route.layouts.length && shared < target.route.layouts.length && current.route.layouts[shared]!.id === target.route.layouts[shared]!.id) shared++;
+  const boundary = target.route.layouts[Math.max(0, shared - 1)];
+  if (!boundary) throw new Error("Routes do not share a root layout");
+  return { current, target, boundary, chainToRender: target.route.layouts.slice(shared) };
+}
+
+const runtimeBuilds = new Map<boolean, Promise<string>>();
+
+async function buildRuntime(alpine: boolean): Promise<string> {
+  const entrypoint = alpine ? "./client/runtime-alpine.ts" : "./client/runtime.ts";
+  const build = await Bun.build({ entrypoints: [new URL(entrypoint, import.meta.url).pathname], target: "browser", minify: true });
+  if (!build.success || !build.outputs[0]) throw new AggregateError(build.logs, "Failed to build the Brandy client runtime");
+  return build.outputs[0].text();
+}
+
+export const buildClientRuntime = buildRuntime;
+
+function compiledRuntime(alpine: boolean): Promise<string> {
+  const existing = runtimeBuilds.get(alpine);
+  if (existing) return existing;
+  const build = buildRuntime(alpine);
+  runtimeBuilds.set(alpine, build);
+  return build;
+}
+
+export function injectClientRuntime(document: string, clientPath: string): string {
+  if (document.includes(`src="${clientPath}"`) || document.includes(`src='${clientPath}'`)) return document;
+  const script = `<script type="module" src="${escapeAttribute(clientPath)}"></script>`;
+  return document.includes("</body>") ? document.replace("</body>", `${script}</body>`) : `${document}${script}`;
+}
+
+function injectStylesheet(document: string, stylesheet: string): string {
+  if (document.includes(`href="${stylesheet}"`) || document.includes(`href='${stylesheet}'`)) return document;
+  const link = `<link rel="stylesheet" href="${escapeAttribute(stylesheet)}">`;
+  return document.includes("</head>") ? document.replace("</head>", `${link}</head>`) : `${link}${document}`;
+}
+
+function injectDevRuntime(document: string): string {
+  if (document.includes("/_brandy/dev.js")) return document;
+  const script = `<script type="module" src="/_brandy/dev.js"></script>`;
+  return document.includes("</body>") ? document.replace("</body>", `${script}</body>`) : `${document}${script}`;
 }
 
 export async function createBrandy(options: BrandyOptions): Promise<Elysia> {
-  const manifest = await buildManifest(options.appDir);
+  const manifest = options.manifest ?? await buildManifest(options.appDir ?? "app", options.cacheBust);
   const clientPath = options.clientPath ?? "/_brandy/runtime.js";
-  const build = await Bun.build({
-    entrypoints: [new URL("./client/runtime.ts", import.meta.url).pathname],
-    target: "browser",
-    minify: true,
-  });
-  if (!build.success || !build.outputs[0]) {
-    throw new AggregateError(build.logs, "Failed to build the Brandy client runtime");
-  }
-  const runtime = await build.outputs[0].text();
+  const runtime = options.runtime ?? await compiledRuntime(options.alpine !== false);
   const app = new Elysia();
+
+  if (options.setup) await options.setup(app);
 
   app.get(clientPath, () => new Response(runtime, {
     headers: { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-cache" },
   }));
 
-  app.get("/*", async ({ request, set }) => {
-    const targetURL = normalizePathname(request.url);
-    try {
-      if (request.headers.get(PARTIAL_HEADER) === "1") {
-        const currentURL = request.headers.get(CURRENT_URL_HEADER);
-        if (!currentURL) {
-          set.status = 400;
-          return "Missing x-brandy-current-url header";
-        }
-        const diff = diffRoutes(manifest, currentURL, targetURL);
-        set.headers[RETARGET_HEADER] = `#${slotId(diff.boundary.id)}`;
-        set.headers[RESWAP_HEADER] = "innerHTML";
-        set.headers["vary"] = `${PARTIAL_HEADER}, ${CURRENT_URL_HEADER}`;
-        set.headers["content-type"] = "text/html; charset=utf-8";
-        return renderFragment(diff);
-      }
+  if (options.stylesheet) app.get("/_brandy/app.css", () => new Response(options.stylesheet, {
+    headers: { "content-type": "text/css; charset=utf-8", "cache-control": options.dev ? "no-cache" : "public, max-age=31536000, immutable" },
+  }));
 
-      const match = matchRoute(manifest, targetURL);
-      set.headers["content-type"] = "text/html; charset=utf-8";
-      return renderFull(match.route);
-    } catch (error) {
-      if (error instanceof Error && error.message.startsWith("No route matches")) {
-        set.status = 404;
-        return "Not found";
-      }
-      throw error;
+  app.post("/_brandy/actions/*", async ({ request, set }) => {
+    const actionPath = new URL(request.url).pathname;
+    const action = manifest.actions.get(actionPath);
+    if (!action) { set.status = 404; return "Unknown action"; }
+    const currentPath = normalizePathname(request.headers.get(CURRENT_URL_HEADER) ?? request.headers.get("referer") ?? "/");
+    const current = resolveMatch(manifest, currentPath).match;
+    const result = await action.handler(await request.formData(), { params: current.params, request, url: new URL(currentPath, request.url) });
+    if (result instanceof Response) return result;
+    const targetPath = normalizePathname(isRevalidation(result) ? result.path : currentPath);
+    const target = resolveMatch(manifest, targetPath).match;
+    const targetRequest = new Request(new URL(targetPath, request.url), { headers: request.headers });
+    set.headers[TARGET_URL_HEADER] = targetPath;
+    set.headers["content-type"] = "text/html; charset=utf-8";
+
+    if (request.headers.get(PARTIAL_HEADER) === "1") {
+      const diff = diffMatches(current, target);
+      const rendered = await renderFragmentMatch(diff, targetRequest);
+      set.status = rendered.status;
+      set.headers[RETARGET_HEADER] = `#${slotId(diff.boundary.id)}`;
+      set.headers[RESWAP_HEADER] = "innerHTML";
+      return `${rendered.html}${metadataSwap(rendered.metadata)}`;
     }
+    return Response.redirect(new URL(targetPath, request.url), 303);
+  });
+
+  app.get("/*", async ({ request, set }) => {
+    const publicPath = decodeURIComponent(new URL(request.url).pathname);
+    if (options.publicDir && !publicPath.startsWith("/_brandy/") && !publicPath.includes("..")) {
+      const file = Bun.file(`${options.publicDir}${publicPath}`);
+      if (await file.exists()) return new Response(file);
+    }
+    const targetPath = normalizePathname(request.url);
+    const targetResult = resolveMatch(manifest, targetPath);
+    set.headers["content-type"] = "text/html; charset=utf-8";
+    if (request.headers.get(PARTIAL_HEADER) === "1") {
+      const currentPath = request.headers.get(CURRENT_URL_HEADER);
+      if (!currentPath) { set.status = 400; return "Missing x-brandy-current-url header"; }
+      const current = resolveMatch(manifest, normalizePathname(currentPath)).match;
+      const refresh = request.headers.get(REFRESH_BOUNDARY_HEADER);
+      let diff = diffMatches(current, targetResult.match);
+      if (refresh) {
+        const index = targetResult.match.route.layouts.findIndex((layout) => layout.id === refresh);
+        if (index >= 0) {
+          const boundary = targetResult.match.route.layouts[Math.max(0, index - 1)]!;
+          diff = { current, target: targetResult.match, boundary, chainToRender: targetResult.match.route.layouts.slice(index) };
+        }
+      }
+      const rendered = await renderFragmentMatch(diff, request);
+      set.status = targetResult.missing ? 404 : rendered.status;
+      set.headers[RETARGET_HEADER] = `#${slotId(diff.boundary.id)}`;
+      set.headers[RESWAP_HEADER] = "innerHTML";
+      set.headers[TARGET_URL_HEADER] = targetPath;
+      set.headers["vary"] = `${PARTIAL_HEADER}, ${CURRENT_URL_HEADER}`;
+      return `${rendered.html}${metadataSwap(rendered.metadata)}`;
+    }
+    const rendered = await renderFullMatch(targetResult.match, request);
+    set.status = targetResult.missing ? 404 : rendered.status;
+    let document = injectClientRuntime(injectMetadata(rendered.html, rendered.metadata), clientPath);
+    if (options.stylesheet) document = injectStylesheet(document, "/_brandy/app.css");
+    if (options.dev) document = injectDevRuntime(document);
+    return document;
   });
   return app;
 }
 
+export * from "./core/control.ts";
 export * from "./core/diff.ts";
 export * from "./core/path.ts";
 export * from "./core/render.ts";
 export * from "./core/types.ts";
 export * from "./core/walker.ts";
+export * from "./config.ts";

@@ -1,20 +1,35 @@
 declare global {
-  interface Window { Brandy?: { reinit?: (root: Element) => void } }
+  interface Window {
+    Brandy?: { reinit?: (root: Element) => void };
+  }
 }
 
 const PARTIAL = "x-brandy-navigation";
 const CURRENT = "x-brandy-current-url";
+let renderedURL = location.pathname + location.search;
 
-function internal(url: URL): boolean {
-  return url.origin === location.origin;
+function internal(url: URL): boolean { return url.origin === location.origin; }
+
+function reconcileHead(fragment: DocumentFragment): void {
+  const update = fragment.querySelector<HTMLTemplateElement>("template[data-brandy-head]");
+  if (!update) return;
+  document.head.querySelectorAll("[data-brandy-metadata]").forEach((node) => node.remove());
+  document.head.append(update.content.cloneNode(true));
+  update.remove();
 }
 
-async function navigate(url: URL, init?: RequestInit, push = true): Promise<void> {
-  const response = await fetch(url, {
-    ...init,
-    headers: { ...Object.fromEntries(new Headers(init?.headers)), [PARTIAL]: "1", [CURRENT]: location.pathname + location.search },
-  });
-  if (!response.ok) {
+function reinitialize(root: Element): void {
+  window.Brandy?.reinit?.(root);
+}
+
+async function navigate(url: URL, init?: RequestInit, historyMode: "push" | "none" = "push"): Promise<void> {
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      ...init,
+      headers: { ...Object.fromEntries(new Headers(init?.headers)), [PARTIAL]: "1", [CURRENT]: renderedURL },
+    });
+  } catch {
     location.assign(url);
     return;
   }
@@ -22,12 +37,19 @@ async function navigate(url: URL, init?: RequestInit, push = true): Promise<void
   const mode = response.headers.get("x-brandy-reswap");
   const target = selector && document.querySelector(selector);
   if (!target || mode !== "innerHTML") {
-    location.assign(url);
+    location.assign(response.url || url);
     return;
   }
-  target.innerHTML = await response.text();
-  if (push) history.pushState({}, "", url);
-  window.Brandy?.reinit?.(target);
+  const template = document.createElement("template");
+  template.innerHTML = await response.text();
+  reconcileHead(template.content);
+  target.replaceChildren(template.content.cloneNode(true));
+  const finalURL = response.headers.get("x-brandy-url") ?? `${url.pathname}${url.search}`;
+  if (historyMode === "push" || finalURL !== renderedURL && url.pathname.startsWith("/_brandy/actions/")) {
+    history.pushState({}, "", finalURL);
+  }
+  renderedURL = finalURL;
+  reinitialize(target);
 }
 
 document.addEventListener("click", (event) => {
@@ -43,17 +65,23 @@ document.addEventListener("click", (event) => {
 document.addEventListener("submit", (event) => {
   const form = event.target as HTMLFormElement;
   if (!(form instanceof HTMLFormElement) || form.hasAttribute("data-brandy-reload")) return;
-  const url = new URL(form.action || location.href, location.href);
+  const url = new URL(form.action || renderedURL, location.href);
   if (!internal(url)) return;
   event.preventDefault();
   const method = form.method.toUpperCase();
   const data = new FormData(form, event.submitter as HTMLElement | null ?? undefined);
   if (method === "GET") {
-    url.search = new URLSearchParams(data as unknown as Record<string, string>).toString();
+    const query = new URLSearchParams();
+    for (const [key, value] of data) if (typeof value === "string") query.append(key, value);
+    url.search = query.toString();
     void navigate(url);
   } else {
-    void navigate(url, { method, body: data });
+    void navigate(url, { method, body: data }, "none");
   }
+});
+
+addEventListener("popstate", () => {
+  void navigate(new URL(location.href), undefined, "none");
 });
 
 export {};

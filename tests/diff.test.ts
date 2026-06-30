@@ -3,17 +3,20 @@ import { Html } from "@elysiajs/html";
 import { diffRoutes, normalizePathname, slotId, type LayoutNode, type Route, type RouteManifest } from "brandy";
 
 const renderLayout = ({ children }: { children: JSX.Element }) => children;
-const root: LayoutNode = { id: "root", file: "app/layout.tsx", render: renderLayout };
-const dashboard: LayoutNode = { id: "dashboard", file: "app/dashboard/layout.tsx", render: renderLayout };
-const users: LayoutNode = { id: "dashboard/users", file: "app/dashboard/users/layout.tsx", render: renderLayout };
+const root: LayoutNode = { id: "root", directory: "app", file: "app/layout.tsx", render: renderLayout };
+const dashboard: LayoutNode = { id: "dashboard", directory: "app/dashboard", file: "app/dashboard/layout.tsx", render: renderLayout };
+const users: LayoutNode = { id: "dashboard/users", directory: "app/dashboard/users", file: "app/dashboard/users/layout.tsx", render: renderLayout };
 
 function route(pattern: string, layouts: LayoutNode[]): Route {
   const segments = pattern === "/" ? [] : pattern.slice(1).split("/");
-  return { id: pattern, pattern, segments, layouts, pageFile: `${pattern}/page.tsx`, renderPage: () => pattern };
+  const pageFile = `${pattern}/page.tsx`;
+  const renderPage = () => pattern;
+  return { id: pattern, pattern, segments, layouts, pageFile, renderPage, page: { id: `${pattern}/page`, directory: pattern, file: pageFile, render: renderPage } };
 }
 
 const manifest: RouteManifest = {
   appDir: "/app",
+  actions: new Map(),
   routes: [
     route("/", [root]),
     route("/about", [root]),

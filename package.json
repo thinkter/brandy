@@ -1,23 +1,31 @@
 {
   "name": "brandy",
   "version": "0.0.1",
-  "private": true,
   "type": "module",
+  "bin": {
+    "brandy": "./src/cli.ts"
+  },
   "exports": {
-    ".": "./src/server.ts"
+    ".": "./src/server.ts",
+    "./config": "./src/config.ts"
   },
   "scripts": {
-    "dev": "bun --watch example/server.ts",
-    "start": "bun example/server.ts",
+    "dev": "bun src/cli.ts dev",
+    "build": "bun src/cli.ts build",
+    "start": "bun src/cli.ts start",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
-    "build:client": "bun build src/client/runtime.ts --target=browser --minify --outfile=dist/brandy.js"
+    "build:client": "bun build src/client/runtime-alpine.ts --target=browser --minify --outfile=dist/brandy.js"
   },
   "dependencies": {
     "@elysiajs/html": "1.4.2",
-    "elysia": "1.4.29"
+    "@tailwindcss/cli": "^4.3.2",
+    "alpinejs": "^3.15.12",
+    "elysia": "1.4.29",
+    "tailwindcss": "^4.3.2"
   },
   "devDependencies": {
+    "@types/alpinejs": "^3.13.11",
     "@types/bun": "latest",
     "typescript": "5.9.3"
   }

@@ -9,11 +9,19 @@ function matches(route: Route, pathname: string): boolean {
   );
 }
 
+function paramsFor(route: Route, pathname: string): Record<string, string> {
+  const parts = pathname === "/" ? [] : pathname.slice(1).split("/");
+  return Object.fromEntries(route.segments.flatMap((segment, index) => {
+    if (!segment.startsWith("[") || !segment.endsWith("]")) return [];
+    return [[segment.slice(1, -1), decodeURIComponent(parts[index]!)]];
+  }));
+}
+
 export function matchRoute(manifest: RouteManifest, url: string): RouteMatch {
   const pathname = normalizePathname(url);
   const route = manifest.routes.find((candidate) => matches(candidate, pathname));
   if (!route) throw new Error(`No route matches ${pathname}`);
-  return { route, pathname };
+  return { route, pathname, params: paramsFor(route, pathname) };
 }
 
 /** Pure route-tree diff. The returned boundary and fragment chain are inseparable. */
