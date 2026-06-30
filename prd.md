@@ -13,7 +13,7 @@ Brandy is a web framework that takes the *developer experience* of the Next.js A
 
 The core bet: the App Router's nested-layout tree is **secretly a description of swap targets**. Brandy computes, on every navigation, the deepest layout the old and new URL share, renders only the part that diverged, and swaps it into that layout's outlet. The route tree *is* the wiring, so the developer never hand-writes a target, a swap directive, or a frame id. They write a function and a plain `<a>`.
 
-Client-side interactivity (dropdowns, toggles, optimistic UI) is explicitly **not** Brandy's job — it's delegated to an adopted dependency (Alpine or a signals library). Brandy owns navigation and data; the dependency owns client state.
+Client-side interactivity (dropdowns, toggles, optimistic UI) is explicitly **not** Brandy's job — it's delegated to Alpine.js by default. Brandy owns navigation and data; Alpine owns client state.
 
 ---
 
@@ -91,7 +91,7 @@ Cold load (no partial-nav header) renders the full document top-to-bottom; soft 
 - **Server framework:** Elysia
 - **Templating:** server-side JSX via `@elysiajs/html` (returns strings; no hydration)
 - **Styling:** Tailwind CSS
-- **Client interactivity (adopted, not built):** Alpine.js (ships now) *or* a signals library (Preact signals / nanostores) — final pick is an open decision (D3).
+- **Client interactivity (adopted, not built):** Alpine.js, bundled and started by default; set `alpine: false` to opt out while keeping Brandy navigation.
 - **Transport:** HTML fragments over HTTP, htmx-style swapping (via Brandy's own thin runtime).
 
 Note: Brandy is a layer *on top of* Elysia's explicit router. A boot-time walker derives the route table and registers routes programmatically. Elysia's headline feature (Eden typed RPC) is intentionally not used on the client; its value is retained server-side between loader and template.
@@ -138,7 +138,7 @@ Priorities: **P0** = core spine (a thing that navigates). **P1** = makes it usab
 
 | # | Feature | Requirement |
 |---|---|---|
-| 14 | Pick the dependency | Alpine (proven, ships now) or a signals lib (smaller, more "ours"). Open decision D3. |
+| 14 | Adopt the dependency | Alpine is bundled and started by default; `alpine: false` opts out without disabling Brandy navigation. |
 | 15 | Document the territory line | State in README: navigation + data = framework; client state = dependency. Stops relitigation. |
 | 16 | Reactivity-agnostic seam | (Covered by #6's constraint — listed so it's never treated as new work. It's the load-bearing rule.) |
 
@@ -181,7 +181,7 @@ The framework sees the `action` reference, generates the POST route, and wires t
 
 - **D1 — HTML over the wire, not RSC.** Brandy renders strings and swaps fragments; it does not implement a server/client component protocol. Consequence: no typed client RPC; full progressive enhancement.
 - **D2 — Adopt client reactivity; never build it.** Client-state interactivity is delegated to a dependency (Alpine or signals), permanently. The framework's navigation runtime stays reactivity-agnostic and communicates with the dependency only through the DOM, via one re-init hook on each swap. This keeps the door open to swapping the dependency later at the cost of exactly one rule — not an abstraction layer.
-- **D3 — Dependency choice (OPEN).** Alpine vs. a signals library. Alpine ships sooner; signals are smaller and feel more native. To be decided.
+- **D3 — Alpine by default.** Alpine is the adopted client-state dependency and is bundled and started by default. Applications can set `alpine: false` to retain Brandy navigation without Alpine.
 - **D4 — Back/forward is a re-diff, not a snapshot restore.** History is handled by re-diffing against the popped URL because htmx's snapshot cache has no knowledge of the layout hierarchy.
 
 ## 12. Risks & Open Questions
@@ -191,7 +191,7 @@ The framework sees the `action` reference, generates the POST route, and wires t
 - **The double-render discipline.** Every template must render correctly both naked (partial) and full-wrapped (cold). Easy to author a template that only works one way; this is a footgun to mitigate with conventions/tooling.
 - **Back-button correctness.** History over partial navigation is the sharpest technical edge; getting it wrong produces mysterious bugs.
 - **"Files, no plumbing" only holds for navigation/data.** The moment a developer needs client interactivity, attributes (plumbing) reappear via the adopted library. The promise must be scoped honestly in docs.
-- **Dependency lock-in vs. swap cost (D3).** Tied to whether the seam (D2) genuinely stays clean as features grow.
+- **Dependency swap cost (D3).** Keep the seam (D2) clean so opting out of Alpine or adopting another client-state library remains practical as features grow.
 
 ## 13. Milestones / Roadmap
 
