@@ -8,7 +8,7 @@ import type {
 type RenderNode = LayoutNode | PageNode;
 
 function outlet(layout: LayoutNode, children: string): JSX.Element {
-  return `<div id="${escapeAttribute(slotId(layout.id))}" data-brandy-slot>${children}</div>` as JSX.Element;
+  return `<div id="${slotId(layout.id)}" data-brandy-slot>${children}</div>` as JSX.Element;
 }
 
 function context(match: RouteMatch, request: Request): RequestContext {
