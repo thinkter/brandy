@@ -12,8 +12,7 @@ const ERROR_FILES = ["error.tsx", "error.ts", "error.jsx", "error.js"];
 const NOT_FOUND_FILES = ["not-found.tsx", "not-found.ts", "not-found.jsx", "not-found.js"];
 const ACTION_FILES = ["actions.tsx", "actions.ts", "actions.jsx", "actions.js"];
 
-async function firstExisting(directory: string, candidates: string[]): Promise<string | undefined> {
-  const entries = new Set(await readdir(directory));
+function firstExisting(directory: string, entries: ReadonlySet<string>, candidates: string[]): string | undefined {
   const name = candidates.find((candidate) => entries.has(candidate));
   return name ? join(directory, name) : undefined;
 }
@@ -72,10 +71,13 @@ async function walkDirectory(
   routes: Route[],
   actions: Map<string, ActionDefinition>,
 ): Promise<void> {
-  const [layoutFile, pageFile, errorFile, notFoundFile, actionsFile] = await Promise.all([
-    firstExisting(directory, LAYOUT_FILES), firstExisting(directory, PAGE_FILES), firstExisting(directory, ERROR_FILES),
-    firstExisting(directory, NOT_FOUND_FILES), firstExisting(directory, ACTION_FILES),
-  ]);
+  const entries = await readdir(directory, { withFileTypes: true });
+  const names = new Set(entries.map((entry) => entry.name));
+  const layoutFile = firstExisting(directory, names, LAYOUT_FILES);
+  const pageFile = firstExisting(directory, names, PAGE_FILES);
+  const errorFile = firstExisting(directory, names, ERROR_FILES);
+  const notFoundFile = firstExisting(directory, names, NOT_FOUND_FILES);
+  const actionsFile = firstExisting(directory, names, ACTION_FILES);
   const ownError = await loadDefault<ErrorRenderer>(errorFile, "error boundary");
   const ownNotFound = await loadDefault<NotFoundRenderer>(notFoundFile, "not-found");
   const renderError = ownError ?? inheritedError;
@@ -99,7 +101,6 @@ async function walkDirectory(
     routes.push({ id: pattern, pattern, segments, layouts, page, pageFile, renderPage: module.default });
   }
 
-  const entries = await readdir(directory, { withFileTypes: true });
   const directories = entries
     .filter((entry) => entry.isDirectory() && !entry.name.startsWith("_") && !entry.name.startsWith("."))
     .sort((a, b) => a.name.localeCompare(b.name));
