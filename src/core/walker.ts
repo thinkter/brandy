@@ -46,12 +46,19 @@ async function loadLayout(
 async function loadActions(file: string | undefined, segmentPath: string, actions: Map<string, ActionDefinition>): Promise<void> {
   if (!file) return;
   const module = await importModule(file);
+  const canonicalModule = importVersion
+    ? await import(file) as Record<string, unknown>
+    : module;
   for (const [name, value] of Object.entries(module)) {
     if (name === "default" || typeof value !== "function") continue;
     const handler = value as ServerAction;
     const id = `${segmentPath || "root"}:${name}`;
     const path = `/_brandy/actions/${Buffer.from(id).toString("base64url")}`;
     Object.defineProperty(handler, "toString", { configurable: true, value: () => path });
+    const canonicalHandler = canonicalModule[name];
+    if (typeof canonicalHandler === "function" && canonicalHandler !== handler) {
+      Object.defineProperty(canonicalHandler, "toString", { configurable: true, value: () => path });
+    }
     actions.set(path, { id, path, segmentPath, file, name, handler });
   }
 }

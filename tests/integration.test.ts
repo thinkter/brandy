@@ -78,6 +78,14 @@ test("the example uses Alpine without a custom client entrypoint", async () => {
   expect(html).toContain('x-on:click="count++"');
 });
 
+test("development cache busting preserves server action URLs", async () => {
+  const app = await createBrandy({ appDir, cacheBust: crypto.randomUUID() });
+  const html = await (await app.handle(new Request("http://localhost/dashboard"))).text();
+  const action = html.match(/<form[^>]+action="([^"]+)"/)?.[1];
+  expect(action).toStartWith("/_brandy/actions/");
+  expect(action).not.toContain("function");
+});
+
 test("dynamic params feed loaders and loader metadata", async () => {
   const app = await createBrandy({ appDir });
   const response = await app.handle(new Request("http://localhost/dashboard/users/42"));
