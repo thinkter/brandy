@@ -37,15 +37,35 @@ export default function Home({ data }: { data: HomeData }) {
       </div>
 
       <div class="mt-6 grid gap-4 sm:grid-cols-2">
-        <a class="rounded-xl border border-zinc-800 bg-zinc-900/40 p-5 no-underline transition hover:border-zinc-600" href="/server">
-          <span class="text-xs font-semibold uppercase tracking-wider text-amber-400">Server functions</span>
-          <strong class="mt-2 block text-lg">Use filesystem and process APIs</strong>
-          <span class="mt-2 block text-sm leading-6 text-zinc-400">Run async Node and Bun code in loaders without shipping it to the browser.</span>
+        <a
+          class="rounded-xl border border-zinc-800 bg-zinc-900/40 p-5 no-underline transition hover:border-zinc-600"
+          href="/server"
+        >
+          <span class="text-xs font-semibold uppercase tracking-wider text-amber-400">
+            Server functions
+          </span>
+          <strong class="mt-2 block text-lg">
+            Use filesystem and process APIs
+          </strong>
+          <span class="mt-2 block text-sm leading-6 text-zinc-400">
+            Run async Node and Bun code in loaders without shipping it to the
+            browser.
+          </span>
         </a>
-        <a class="rounded-xl border border-zinc-800 bg-zinc-900/40 p-5 no-underline transition hover:border-zinc-600" href="/components">
-          <span class="text-xs font-semibold uppercase tracking-wider text-amber-400">Components</span>
-          <strong class="mt-2 block text-lg">Compose reusable server TSX</strong>
-          <span class="mt-2 block text-sm leading-6 text-zinc-400">Share typed UI primitives and add Alpine only where interaction is needed.</span>
+        <a
+          class="rounded-xl border border-zinc-800 bg-zinc-900/40 p-5 no-underline transition hover:border-zinc-600"
+          href="/components"
+        >
+          <span class="text-xs font-semibold uppercase tracking-wider text-amber-400">
+            Components
+          </span>
+          <strong class="mt-2 block text-lg">
+            Compose reusable server TSX
+          </strong>
+          <span class="mt-2 block text-sm leading-6 text-zinc-400">
+            Share typed UI primitives and add Alpine only where interaction is
+            needed.
+          </span>
         </a>
       </div>
 
@@ -70,18 +90,11 @@ export default function Home({ data }: { data: HomeData }) {
         >
           <div class="flex items-center justify-between">
             <p class="text-sm font-semibold">Client-side state</p>
-            <button
-              class="text-sm underline"
-              x-on:click="open = !open"
-            >
+            <button class="text-sm underline" x-on:click="open = !open">
               Toggle
             </button>
           </div>
-          <div
-            class="mt-4 flex items-center gap-3"
-            x-show="open"
-            x-cloak=""
-          >
+          <div class="mt-4 flex items-center gap-3" x-show="open" x-cloak="">
             <button
               class="rounded bg-zinc-100 px-3 py-1.5 text-zinc-950"
               x-on:click="count++"
