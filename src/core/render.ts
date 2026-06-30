@@ -1,11 +1,14 @@
 import { NotFoundError } from "./control.ts";
-import { escapeAttribute, slotId } from "./path.ts";
+import { escapeAttribute, slotId, streamId } from "./path.ts";
 import type {
   LayoutNode, LoadedRoute, Metadata, MetadataExport, PageNode, RenderContext,
-  RenderedRoute, RenderOptions, RequestContext, Route, RouteDiff, RouteMatch,
+  RenderedRoute, RenderOptions, RequestContext, Route, RouteDiff, RouteMatch, SyncRenderedRoute,
 } from "./types.ts";
 
 type RenderNode = LayoutNode | PageNode;
+type RenderMode = "fragment" | "document";
+
+const STREAM_BOUNDARY = "<!--brandy:stream-boundary-->";
 
 function outlet(layout: LayoutNode, children: string): JSX.Element {
   return `<div id="${slotId(layout.id)}" data-brandy-slot>${children}</div>` as JSX.Element;
@@ -69,7 +72,8 @@ function nearestRenderer<T extends "renderError" | "renderNotFound">(nodes: Rend
   return undefined;
 }
 
-async function renderPipeline(match: RouteMatch, request: Request, layouts: LayoutNode[], options: RenderOptions = {}): Promise<RenderedRoute> {
+/** The original synchronous render pipeline. Always resolves; never returns a stream. */
+async function renderPipelineCore(match: RouteMatch, request: Request, layouts: LayoutNode[], options: RenderOptions = {}): Promise<Omit<SyncRenderedRoute, "kind">> {
   const nodes: RenderNode[] = [...layouts, match.route.page];
   const base = context(match, request);
   try {
@@ -101,6 +105,122 @@ async function renderPipeline(match: RouteMatch, request: Request, layouts: Layo
   }
 }
 
+function findStreamingIndex(nodes: RenderNode[], minIndex: number): number {
+  for (let index = nodes.length - 1; index >= minIndex; index--) {
+    if (nodes[index]?.renderLoading) return index;
+  }
+  return -1;
+}
+
+function streamSwap(anchorId: string, html: string): string {
+  return `<template data-brandy-stream-target="${escapeAttribute(anchorId)}">${html}</template>`;
+}
+
+/** Escapes "</" so a real "</script>" inside serialized content can never close the wrapping <script> tag early. */
+function inlineScript(body: string): string {
+  return `<script>${body.replace(/<\//g, "<\\/")}</script>`;
+}
+
+function inlineSwap(anchorId: string, html: string): string {
+  return inlineScript(`document.getElementById(${JSON.stringify(anchorId)}).innerHTML=${JSON.stringify(html)};`);
+}
+
+function inlineMetaSwap(metadata: Metadata): string {
+  const tags = metaTags(metadata);
+  if (!tags) return "";
+  return inlineScript(`document.querySelectorAll("[data-brandy-metadata]").forEach(node=>node.remove());document.head.insertAdjacentHTML("beforeend",${JSON.stringify(tags)});`);
+}
+
+function splitDocumentClosing(document: string): { shell: string; closing: string } {
+  const closingTag = /<\/(?:body|html)\s*>/gi;
+  let bodyIndex = -1;
+  let htmlIndex = -1;
+  for (const match of document.matchAll(closingTag)) {
+    if (match[0].toLowerCase().startsWith("</body")) bodyIndex = match.index;
+    else htmlIndex = match.index;
+  }
+  const index = bodyIndex >= 0 ? bodyIndex : htmlIndex;
+  return index >= 0
+    ? { shell: document.slice(0, index), closing: document.slice(index) }
+    : { shell: document, closing: "" };
+}
+
+function renderPipelineStreaming(
+  match: RouteMatch,
+  request: Request,
+  layouts: LayoutNode[],
+  streamIndex: number,
+  mode: RenderMode,
+  options: RenderOptions,
+  sharedStatic: Metadata[],
+): RenderedRoute {
+  const nodes: RenderNode[] = [...layouts, match.route.page];
+  const streamNode = nodes[streamIndex]!;
+  const ancestorLayouts = layouts.slice(0, Math.min(streamIndex, layouts.length));
+  const deeperLayouts = layouts.slice(Math.min(streamIndex, layouts.length));
+  const anchorId = streamId(streamNode.id);
+  const encoder = new TextEncoder();
+
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      let ancestorMetadata: Metadata = {};
+      let documentClosing = "";
+      try {
+        const loadedAncestors = await loadNodes(match, request, ancestorLayouts);
+        ancestorMetadata = loadedAncestors.metadata;
+        const skeletonInner = `<div id="${escapeAttribute(anchorId)}" data-brandy-stream>${String(streamNode.renderLoading!())}</div>`;
+        let skeleton = await wrap(skeletonInner, ancestorLayouts, loadedAncestors, request);
+        if (mode === "document") {
+          skeleton = injectMetadata(skeleton, mergeMetadata([...sharedStatic, ancestorMetadata]));
+          const framed = splitDocumentClosing(skeleton);
+          skeleton = framed.shell;
+          documentClosing = framed.closing;
+        }
+        controller.enqueue(encoder.encode(skeleton));
+      } catch {
+        // Ancestor layouts failed before anything could stream — nothing useful to flush;
+        // the trailing chunk below still attempts to report something into the anchor-less void.
+      }
+      controller.enqueue(encoder.encode(STREAM_BOUNDARY));
+
+      let html: string;
+      let metadata = mergeMetadata([...sharedStatic, ancestorMetadata]);
+      try {
+        const deeper = await renderPipelineCore(match, request, deeperLayouts, options);
+        html = deeper.html;
+        metadata = mergeMetadata([...sharedStatic, ancestorMetadata, deeper.metadata]);
+      } catch {
+        html = "<p>Something went wrong.</p>";
+      }
+      const tail = mode === "document"
+        ? inlineSwap(anchorId, html) + inlineMetaSwap(metadata) + documentClosing
+        : streamSwap(anchorId, html) + metadataSwap(metadata);
+      controller.enqueue(encoder.encode(tail));
+      controller.close();
+    },
+  });
+
+  return { kind: "stream", stream, status: 200 };
+}
+
+async function renderPipeline(
+  match: RouteMatch,
+  request: Request,
+  layouts: LayoutNode[],
+  mode: RenderMode,
+  options: RenderOptions = {},
+  sharedStatic: Metadata[] = [],
+): Promise<RenderedRoute> {
+  const nodes: RenderNode[] = [...layouts, match.route.page];
+  // The root layout (always index 0 for a full document) can never be the streaming boundary —
+  // streaming it would mean no <html> shell is available to flush as the first chunk.
+  const minIndex = mode === "document" ? 1 : 0;
+  const streamIndex = findStreamingIndex(nodes, minIndex);
+  if (streamIndex >= 0) return renderPipelineStreaming(match, request, layouts, streamIndex, mode, options, sharedStatic);
+  const core = await renderPipelineCore(match, request, layouts, options);
+  return { kind: "sync", html: core.html, status: core.status, metadata: mergeMetadata([...sharedStatic, core.metadata]) };
+}
+
 function metaTags(metadata: Metadata): string {
   const tags: string[] = [];
   if (metadata.title !== undefined) tags.push(`<title data-brandy-metadata>${escapeAttribute(metadata.title)}</title>`);
@@ -121,24 +241,36 @@ export function metadataSwap(metadata: Metadata): string {
 }
 
 export async function renderFullMatch(match: RouteMatch, request: Request, options: RenderOptions = {}): Promise<RenderedRoute> {
-  return renderPipeline(match, request, match.route.layouts, options);
+  return renderPipeline(match, request, match.route.layouts, "document", options);
 }
 
 export async function renderFragmentMatch(diff: RouteDiff, request: Request, options: RenderOptions = {}): Promise<RenderedRoute> {
-  const rendered = await renderPipeline(diff.target, request, diff.chainToRender, options);
   const sharedCount = diff.target.route.layouts.length - diff.chainToRender.length;
   const sharedStatic = diff.target.route.layouts.slice(0, sharedCount)
     .flatMap((layout) => layout.metadata && typeof layout.metadata !== "function" ? [layout.metadata] : []);
-  rendered.metadata = mergeMetadata([...sharedStatic, rendered.metadata]);
-  return rendered;
+  return renderPipeline(diff.target, request, diff.chainToRender, "fragment", options, sharedStatic);
+}
+
+async function drainStream(stream: ReadableStream<Uint8Array>): Promise<string> {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let result = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    result += decoder.decode(value, { stream: true });
+  }
+  return result + decoder.decode();
 }
 
 // Backward-compatible low-level helpers retained for P0 consumers.
 export async function renderFull(route: Route): Promise<string> {
   const match: RouteMatch = { route, pathname: route.pattern, params: {} };
-  return (await renderFullMatch(match, new Request(`http://brandy.local${route.pattern}`))).html;
+  const rendered = await renderFullMatch(match, new Request(`http://brandy.local${route.pattern}`));
+  return rendered.kind === "sync" ? rendered.html : drainStream(rendered.stream);
 }
 
 export async function renderFragment(diff: RouteDiff): Promise<string> {
-  return (await renderFragmentMatch(diff, new Request(`http://brandy.local${diff.target.pathname}`))).html;
+  const rendered = await renderFragmentMatch(diff, new Request(`http://brandy.local${diff.target.pathname}`));
+  return rendered.kind === "sync" ? rendered.html : drainStream(rendered.stream);
 }

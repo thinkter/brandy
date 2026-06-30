@@ -16,6 +16,11 @@ export function slotId(layoutId: string): string {
   return `brandy-slot-${suffix}`;
 }
 
+export function streamId(nodeId: string): string {
+  const suffix = nodeId === "root" ? "root" : nodeId.replace(/[^a-zA-Z0-9_-]+/g, "-");
+  return `brandy-stream-${suffix}`;
+}
+
 export function escapeAttribute(value: string): string {
   return value
     .replaceAll("&", "&amp;")

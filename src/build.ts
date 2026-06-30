@@ -8,6 +8,7 @@ import { buildClientRuntime } from "./server.ts";
 async function existing(file: string): Promise<boolean> { try { await access(file); return true; } catch { return false; } }
 const ERROR_FILES = ["error.tsx", "error.ts", "error.jsx", "error.js"];
 const NOT_FOUND_FILES = ["not-found.tsx", "not-found.ts", "not-found.jsx", "not-found.js"];
+const LOADING_FILES = ["loading.tsx", "loading.ts", "loading.jsx", "loading.js"];
 
 async function nearest(directory: string, appDir: string, names: string[]): Promise<string | undefined> {
   let current = directory;
@@ -16,6 +17,11 @@ async function nearest(directory: string, appDir: string, names: string[]): Prom
     if (current === appDir) break;
     current = dirname(current);
   }
+}
+
+// loading.tsx is not inherited like error/not-found — only the node's own directory counts.
+async function ownFile(directory: string, names: string[]): Promise<string | undefined> {
+  for (const name of names) { const file = join(directory, name); if (await existing(file)) return file; }
 }
 
 async function publicPaths(directory: string | false): Promise<string[]> {
@@ -51,9 +57,11 @@ export async function buildApplication(config: ResolvedConfig): Promise<void> {
     for (const layout of route.layouts) {
       imported(layout.file); imported(await nearest(layout.directory, config.appDir, ERROR_FILES));
       imported(await nearest(layout.directory, config.appDir, NOT_FOUND_FILES));
+      imported(await ownFile(layout.directory, LOADING_FILES));
     }
     imported(route.page.file); imported(await nearest(route.page.directory, config.appDir, ERROR_FILES));
     imported(await nearest(route.page.directory, config.appDir, NOT_FOUND_FILES));
+    imported(await ownFile(route.page.directory, LOADING_FILES));
   }
   for (const action of manifest.actions.values()) imported(action.file);
   if (config.configFile) imported(config.configFile);
@@ -62,15 +70,19 @@ export async function buildApplication(config: ResolvedConfig): Promise<void> {
     const file = await nearest(node.directory, config.appDir, files); const name = imported(file);
     return name ? `, ${key}: ${name}.default` : "";
   };
+  const ownBoundary = async (node: LayoutNode | PageNode, files: string[], key: string) => {
+    const file = await ownFile(node.directory, files); const name = imported(file);
+    return name ? `, ${key}: ${name}.default` : "";
+  };
   const layouts = new Map<string, string>();
   for (const route of manifest.routes) for (const node of route.layouts) if (!layouts.has(node.file)) {
     const mod = imported(node.file)!;
-    layouts.set(node.file, `{ id:${JSON.stringify(node.id)}, directory:${JSON.stringify(node.directory)}, file:${JSON.stringify(node.file)}, render:${mod}.default, load:${mod}.load, metadata:${mod}.metadata${await boundary(node, ERROR_FILES, "renderError")}${await boundary(node, NOT_FOUND_FILES, "renderNotFound")} }`);
+    layouts.set(node.file, `{ id:${JSON.stringify(node.id)}, directory:${JSON.stringify(node.directory)}, file:${JSON.stringify(node.file)}, render:${mod}.default, load:${mod}.load, metadata:${mod}.metadata${await boundary(node, ERROR_FILES, "renderError")}${await boundary(node, NOT_FOUND_FILES, "renderNotFound")}${await ownBoundary(node, LOADING_FILES, "renderLoading")} }`);
   }
   const routes: string[] = [];
   for (const route of manifest.routes) {
     const page = route.page; const mod = imported(page.file)!;
-    const pageCode = `{ id:${JSON.stringify(page.id)}, directory:${JSON.stringify(page.directory)}, file:${JSON.stringify(page.file)}, render:${mod}.default, load:${mod}.load, metadata:${mod}.metadata${await boundary(page, ERROR_FILES, "renderError")}${await boundary(page, NOT_FOUND_FILES, "renderNotFound")} }`;
+    const pageCode = `{ id:${JSON.stringify(page.id)}, directory:${JSON.stringify(page.directory)}, file:${JSON.stringify(page.file)}, render:${mod}.default, load:${mod}.load, metadata:${mod}.metadata${await boundary(page, ERROR_FILES, "renderError")}${await boundary(page, NOT_FOUND_FILES, "renderNotFound")}${await ownBoundary(page, LOADING_FILES, "renderLoading")} }`;
     routes.push(`{ id:${JSON.stringify(route.id)}, pattern:${JSON.stringify(route.pattern)}, segments:${JSON.stringify(route.segments)}, layouts:[${route.layouts.map((item) => layouts.get(item.file)).join(",")}], page:${pageCode}, pageFile:${JSON.stringify(page.file)}, renderPage:${mod}.default }`);
   }
   const actions = [...manifest.actions.values()].map((action) => {

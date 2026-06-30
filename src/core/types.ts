@@ -49,6 +49,8 @@ export interface LayoutModule<T = unknown> extends SegmentModule<T> {
   default: (props: LayoutRenderContext<T>) => RenderResult;
 }
 
+export type LoadingRenderer = () => RenderResult;
+
 export interface LayoutNode extends SegmentModule {
   id: string;
   directory: string;
@@ -56,6 +58,7 @@ export interface LayoutNode extends SegmentModule {
   render: LayoutModule["default"];
   renderError?: ErrorRenderer;
   renderNotFound?: NotFoundRenderer;
+  renderLoading?: LoadingRenderer;
 }
 
 export interface PageNode extends SegmentModule {
@@ -65,6 +68,7 @@ export interface PageNode extends SegmentModule {
   render: PageModule["default"];
   renderError?: ErrorRenderer;
   renderNotFound?: NotFoundRenderer;
+  renderLoading?: LoadingRenderer;
 }
 
 export type ActionResult = Revalidation | void | Response;
@@ -126,8 +130,17 @@ export interface LoadedRoute {
   metadata: Metadata;
 }
 
-export interface RenderedRoute {
+export interface SyncRenderedRoute {
+  kind: "sync";
   html: string;
   metadata: Metadata;
   status: number;
 }
+
+export interface StreamRenderedRoute {
+  kind: "stream";
+  stream: ReadableStream<Uint8Array>;
+  status: 200;
+}
+
+export type RenderedRoute = SyncRenderedRoute | StreamRenderedRoute;

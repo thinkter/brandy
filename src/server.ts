@@ -16,6 +16,7 @@ export const RESWAP_HEADER = "x-brandy-reswap";
 export const TARGET_URL_HEADER = "x-brandy-url";
 export const REFRESH_BOUNDARY_HEADER = "x-brandy-refresh-boundary";
 export const PREFETCH_HEADER = "x-brandy-prefetch";
+export const STREAM_HEADER = "x-brandy-stream";
 
 export interface BrandyOptions {
   appDir?: string;
@@ -124,6 +125,24 @@ function injectDevRuntime(document: string): string {
   return document.includes("</body>") ? document.replace("</body>", `${script}</body>`) : `${document}${script}`;
 }
 
+/** Applies a string transform to only the first chunk of a stream — used to inject static
+ * (loader-independent) assets into a streaming document's skeleton without buffering the whole body. */
+function injectIntoFirstChunk(stream: ReadableStream<Uint8Array>, transform: (html: string) => string): ReadableStream<Uint8Array> {
+  const decoder = new TextDecoder();
+  const encoder = new TextEncoder();
+  let injected = false;
+  return stream.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
+    transform(chunk, controller) {
+      if (!injected) {
+        injected = true;
+        controller.enqueue(encoder.encode(transform(decoder.decode(chunk, { stream: true }))));
+        return;
+      }
+      controller.enqueue(chunk);
+    },
+  }));
+}
+
 export async function createBrandy(options: BrandyOptions): Promise<Elysia> {
   const manifest = options.manifest ?? await buildManifest(options.appDir ?? "app", options.cacheBust);
   cacheNotFoundRoute(manifest);
@@ -166,9 +185,14 @@ export async function createBrandy(options: BrandyOptions): Promise<Elysia> {
     if (request.headers.get(PARTIAL_HEADER) === "1") {
       const diff = diffMatches(current, target);
       const rendered = await renderFragmentMatch(diff, targetRequest, renderOptions);
-      set.status = rendered.status;
       set.headers[RETARGET_HEADER] = `#${slotId(diff.boundary.id)}`;
       set.headers[RESWAP_HEADER] = "innerHTML";
+      if (rendered.kind === "stream") {
+        set.status = 200;
+        set.headers[STREAM_HEADER] = "1";
+        return rendered.stream;
+      }
+      set.status = rendered.status;
       return `${rendered.html}${metadataSwap(rendered.metadata)}`;
     }
     return Response.redirect(new URL(targetPath, request.url), 303);
@@ -202,14 +226,29 @@ export async function createBrandy(options: BrandyOptions): Promise<Elysia> {
         }
       }
       const rendered = await renderFragmentMatch(diff, request, renderOptions);
-      set.status = targetResult.missing ? 404 : rendered.status;
       set.headers[RETARGET_HEADER] = `#${slotId(diff.boundary.id)}`;
       set.headers[RESWAP_HEADER] = "innerHTML";
       set.headers[TARGET_URL_HEADER] = targetPath;
       set.headers["vary"] = `${PARTIAL_HEADER}, ${CURRENT_URL_HEADER}`;
+      if (rendered.kind === "stream") {
+        set.status = targetResult.missing ? 404 : 200;
+        set.headers[STREAM_HEADER] = "1";
+        return rendered.stream;
+      }
+      set.status = targetResult.missing ? 404 : rendered.status;
       return `${rendered.html}${metadataSwap(rendered.metadata)}`;
     }
     const rendered = await renderFullMatch(targetResult.match, request, renderOptions);
+    if (rendered.kind === "stream") {
+      set.status = targetResult.missing ? 404 : 200;
+      set.headers[STREAM_HEADER] = "1";
+      return injectIntoFirstChunk(rendered.stream, (html) => {
+        let document = injectClientRuntime(html, clientPath);
+        if (options.stylesheet) document = injectStylesheet(document, "/_brandy/app.css");
+        if (options.dev) document = injectDevRuntime(document);
+        return document;
+      });
+    }
     set.status = targetResult.missing ? 404 : rendered.status;
     let document = injectClientRuntime(injectMetadata(rendered.html, rendered.metadata), clientPath);
     if (options.stylesheet) document = injectStylesheet(document, "/_brandy/app.css");

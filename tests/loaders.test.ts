@@ -22,6 +22,8 @@ test("segment loaders start in parallel", async () => {
   expect(started.sort()).toEqual(["layout", "page"]);
   release();
   const result = await rendering;
+  expect(result.kind).toBe("sync");
+  if (result.kind !== "sync") throw new Error("expected a synchronous render");
   expect(result.html).toContain("layout data");
   expect(result.html).toContain("page data");
 });

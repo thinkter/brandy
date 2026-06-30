@@ -1,7 +1,7 @@
 import { readdir } from "node:fs/promises";
 import { join, relative, resolve, sep } from "node:path";
 import type {
-  ActionDefinition, ErrorRenderer, LayoutModule, LayoutNode, NotFoundRenderer,
+  ActionDefinition, ErrorRenderer, LayoutModule, LayoutNode, LoadingRenderer, NotFoundRenderer,
   PageModule, PageNode, Route, RouteManifest, ServerAction,
 } from "./types.ts";
 import { routePattern } from "./path.ts";
@@ -10,6 +10,7 @@ const LAYOUT_FILES = ["layout.tsx", "layout.ts", "layout.jsx", "layout.js"];
 const PAGE_FILES = ["page.tsx", "page.ts", "page.jsx", "page.js"];
 const ERROR_FILES = ["error.tsx", "error.ts", "error.jsx", "error.js"];
 const NOT_FOUND_FILES = ["not-found.tsx", "not-found.ts", "not-found.jsx", "not-found.js"];
+const LOADING_FILES = ["loading.tsx", "loading.ts", "loading.jsx", "loading.js"];
 const ACTION_FILES = ["actions.tsx", "actions.ts", "actions.jsx", "actions.js"];
 
 function firstExisting(directory: string, entries: ReadonlySet<string>, candidates: string[]): string | undefined {
@@ -36,10 +37,11 @@ async function loadLayout(
   id: string,
   renderError?: ErrorRenderer,
   renderNotFound?: NotFoundRenderer,
+  renderLoading?: LoadingRenderer,
 ): Promise<LayoutNode> {
   const module = await importModule(file) as Partial<LayoutModule>;
   if (typeof module.default !== "function") throw new TypeError(`${file} must default-export a layout function`);
-  return { id, directory, file, render: module.default, load: module.load, metadata: module.metadata, renderError, renderNotFound };
+  return { id, directory, file, render: module.default, load: module.load, metadata: module.metadata, renderError, renderNotFound, renderLoading };
 }
 
 async function loadActions(file: string | undefined, segmentPath: string, actions: Map<string, ActionDefinition>): Promise<void> {
@@ -77,9 +79,13 @@ async function walkDirectory(
   const pageFile = firstExisting(directory, names, PAGE_FILES);
   const errorFile = firstExisting(directory, names, ERROR_FILES);
   const notFoundFile = firstExisting(directory, names, NOT_FOUND_FILES);
+  const loadingFile = firstExisting(directory, names, LOADING_FILES);
   const actionsFile = firstExisting(directory, names, ACTION_FILES);
   const ownError = await loadDefault<ErrorRenderer>(errorFile, "error boundary");
   const ownNotFound = await loadDefault<NotFoundRenderer>(notFoundFile, "not-found");
+  // loading.tsx is intentionally not inherited like error/not-found: it only applies to nodes
+  // created in this exact directory, not threaded down to descendants that lack their own.
+  const ownLoading = await loadDefault<LoadingRenderer>(loadingFile, "loading");
   const renderError = ownError ?? inheritedError;
   const renderNotFound = ownNotFound ?? inheritedNotFound;
   const segmentPath = segments.join("/");
@@ -87,7 +93,7 @@ async function walkDirectory(
 
   const layoutId = segments.length === 0 ? "root" : segmentPath;
   const layouts = layoutFile
-    ? [...inheritedLayouts, await loadLayout(layoutFile, directory, layoutId, renderError, renderNotFound)]
+    ? [...inheritedLayouts, await loadLayout(layoutFile, directory, layoutId, renderError, renderNotFound, ownLoading)]
     : inheritedLayouts;
 
   if (pageFile) {
@@ -96,7 +102,7 @@ async function walkDirectory(
     const pattern = routePattern(segments);
     const page: PageNode = {
       id: `${segmentPath || "root"}/page`, directory, file: pageFile, render: module.default,
-      load: module.load, metadata: module.metadata, renderError, renderNotFound,
+      load: module.load, metadata: module.metadata, renderError, renderNotFound, renderLoading: ownLoading,
     };
     routes.push({ id: pattern, pattern, segments, layouts, page, pageFile, renderPage: module.default });
   }
