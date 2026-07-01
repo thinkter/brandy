@@ -88,12 +88,23 @@ app/
     actions.ts     # colocated server mutations
     layout.tsx
     page.tsx
+    analytics/
+      loading.tsx  # streaming skeleton for this segment
+      page.tsx
     users/
       [id]/
         page.tsx   # /dashboard/users/:id
+      (.)[id]/
+        page.tsx   # modal rendering of /dashboard/users/:id on soft navigation
   404/
     page.tsx       # fallback for unmatched URLs
 ```
+
+`loading.tsx` declares a streaming boundary: the skeleton flushes immediately and the resolved content streams into the same slot when its loaders settle. Deferred content is applied by JavaScript, so a no-JS client sees only the skeleton — do not add `loading.tsx` to routes that must work without JavaScript.
+
+`(.)name`, `(..)name`, and `(...)name` directories intercept soft navigation to an existing standalone route and render its alternate page into a reserved modal outlet; a hard load of the same URL renders the standalone page. The dot count is relative to the marker's own directory, matching Next's semantics.
+
+Next.js conventions Brandy does not implement: route groups (a `(group)` directory is currently treated as a literal segment name), catch-all segments (`[...slug]`), and `generateStaticParams`.
 
 Server JSX is rendered to strings by `@elysiajs/html`; it is never hydrated. Brandy automatically injects its client runtime, so the root layout needs no script setup:
 
@@ -144,6 +155,30 @@ export function load({ params }: { params: Record<string, string> }) {
 }
 ```
 
+## Prerendering
+
+A page can export `prerender = true` to cache its rendered output until an action revalidates it, or `revalidate = 60` to recompute it at most every 60 seconds. Both complete documents and soft-navigation fragments are cached, and statically-patterned routes are warmed at build time.
+
+```tsx
+export const revalidate = 60
+
+export async function load() {
+  return db.stats.summary()
+}
+```
+
+The cache stores everything above the page too: the route's ancestor layouts render once and are served to every visitor. No loader on a cached route — page or layout — may read per-user request data such as cookies or authorization headers. Brandy does not yet detect this, so a personalized cache entry would be served to other users. Caching and `loading.tsx` streaming are mutually exclusive on one route.
+
+## Navigation and prefetching
+
+The client runtime intercepts same-origin links and forms, fetches the diverged fragment, and swaps it at the boundary the server names in its response headers. Hovering or focusing a link for a moment prefetches its fragment; a prefetched entry is used only if the page it was requested from is still the current page.
+
+Three attributes opt out per element:
+
+- `data-brandy-reload` — on a link or form: skip interception and perform a full-page navigation.
+- `data-brandy-no-prefetch` — on a link: never prefetch on hover or focus.
+- `data-brandy-no-intercept` — on a link: navigate to the standalone route even when an intercepting (modal) route exists for it.
+
 ## Actions
 
 Actions live in `actions.ts`. `defineAction` preserves a callable server function while allowing the same reference to render as a generated form URL. Returning `revalidate(path)` runs that route's loader and uses the normal fragment pipeline.
@@ -186,14 +221,20 @@ Do not render `error.message`, `error.stack`, or `String(error)` unconditionally
 
 ## Client state boundary
 
-Navigation and server data are Brandy's responsibility. Client state is Alpine's responsibility. Brandy bundles and starts Alpine by default, so applications can use Alpine attributes directly with no client entrypoint, asset route, or script tag.
+Navigation and server data are Brandy's responsibility. Client state is Alpine's responsibility. Wrap interactive markup in an `<Island>`: Brandy serves Alpine as a separate chunk and fetches it lazily, only when a rendered page or fragment actually contains an island, so fully static routes never download Alpine. There is still no client entrypoint, asset route, or script tag to write.
 
 ```tsx
-<div x-data="{ open: false }">
-  <button x-on:click="open = !open">Toggle</button>
-  <p x-show="open">Client-side state</p>
-</div>
+import { Island } from "brandy"
+
+<Island>
+  <div x-data="{ open: false }">
+    <button x-on:click="open = !open">Toggle</button>
+    <p x-show="open">Client-side state</p>
+  </div>
+</Island>
 ```
+
+Alpine attributes outside an `<Island>` render as inert HTML and never become interactive; `brandy dev` logs a console warning when it finds one. Island state is client-side only, so a fragment swap that replaces an island resets its state.
 
 Use Alpine's long-form directives in TSX. Shorthands such as `@click` and
 `:class` are not valid TSX attribute syntax.

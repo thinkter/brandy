@@ -1,3 +1,9 @@
 node_modules/
 .brandy/
 .brandy-test-*/
+
+.env
+.env.local
+.vercel
+.claude
+
