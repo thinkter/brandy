@@ -23,8 +23,34 @@ test("framework assets are injected without an application server bootstrap", as
   const html = await (await app.handle(new Request("http://localhost/"))).text();
   expect(html).toContain('href="/_brandy/app.css"');
   expect(html).toContain('src="/_brandy/dev.js"');
+  const runtime = await app.handle(new Request("http://localhost/_brandy/runtime.js"));
+  expect(runtime.headers.get("cache-control")).toBe("no-cache");
   const css = await app.handle(new Request("http://localhost/_brandy/app.css"));
   expect(await css.text()).toBe("body{color:red}");
+  expect(css.headers.get("cache-control")).toBe("no-cache");
+});
+
+test("fingerprinted production framework assets use immutable caching", async () => {
+  const app = await createBrandy({
+    appDir,
+    runtime: "console.log('runtime')",
+    clientPath: "/_brandy/runtime.abcdef123456.js",
+    stylesheet: "body{color:red}",
+    stylesheetPath: "/_brandy/app.123456abcdef.css",
+  });
+  const html = await (await app.handle(new Request("http://localhost/"))).text();
+  expect(html.match(/src="\/_brandy\/runtime\.abcdef123456\.js"/g)).toHaveLength(1);
+  expect(html.match(/href="\/_brandy\/app\.123456abcdef\.css"/g)).toHaveLength(1);
+
+  const runtime = await app.handle(new Request("http://localhost/_brandy/runtime.abcdef123456.js"));
+  expect(await runtime.text()).toBe("console.log('runtime')");
+  expect(runtime.headers.get("content-type")).toContain("text/javascript");
+  expect(runtime.headers.get("cache-control")).toBe("public, max-age=31536000, immutable");
+
+  const css = await app.handle(new Request("http://localhost/_brandy/app.123456abcdef.css"));
+  expect(await css.text()).toBe("body{color:red}");
+  expect(css.headers.get("content-type")).toContain("text/css");
+  expect(css.headers.get("cache-control")).toBe("public, max-age=31536000, immutable");
 });
 
 test("public assets stay contained within publicDir", async () => {

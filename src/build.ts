@@ -1,4 +1,5 @@
 import { access, readdir } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { dirname, join, relative, sep } from "node:path";
 import { buildManifest } from "./core/walker.ts";
 import { keyFor, type RenderCacheEntry } from "./core/cache.ts";
@@ -36,6 +37,10 @@ const ERROR_FILES = ["error.tsx", "error.ts", "error.jsx", "error.js"];
 const NOT_FOUND_FILES = ["not-found.tsx", "not-found.ts", "not-found.jsx", "not-found.js"];
 const LOADING_FILES = ["loading.tsx", "loading.ts", "loading.jsx", "loading.js"];
 
+function contentHash(source: string): string {
+  return createHash("sha256").update(source).digest("hex").slice(0, 12);
+}
+
 async function nearest(directory: string, appDir: string, names: string[]): Promise<string | undefined> {
   let current = directory;
   while (current.startsWith(appDir)) {
@@ -70,6 +75,8 @@ export async function buildApplication(config: ResolvedConfig): Promise<void> {
   if (conflicts.length) throw new Error(`Public files conflict with Brandy routes: ${conflicts.join(", ")}`);
   const styles = await compileStyles(config.styles, true);
   const runtime = await buildClientRuntime(config.alpine);
+  const clientPath = `/_brandy/runtime.${contentHash(runtime)}.js`;
+  const stylesheetPath = styles ? `/_brandy/app.${contentHash(styles)}.css` : undefined;
   await resetDirectory(config.outDir);
 
   const imports = new Map<string, string>();
@@ -140,7 +147,7 @@ function registerAction(id,path,segmentPath,file,name,handler){Object.defineProp
 ${actions.join(";\n")}
 const manifest={appDir:${JSON.stringify(config.appDir)},routes:[${routes.join(",\n")}],actions,rootNotFound:${rootNotFoundModule ? `${rootNotFoundModule}.default` : "undefined"}};
 const config=${config.configFile ? `${imported(config.configFile)}.default ?? {}` : "{}"};
-const app=await createBrandy({manifest,alpine:${config.alpine},runtime:${JSON.stringify(runtime)},stylesheet:${JSON.stringify(styles)},publicDir:${JSON.stringify(join(config.outDir, "public"))},trustedOrigins:config.trustedOrigins,setup:config.setup,dev:false,prerenderSnapshot:${JSON.stringify(prerenderSnapshot)}});
+const app=await createBrandy({manifest,alpine:${config.alpine},clientPath:${JSON.stringify(clientPath)},runtime:${JSON.stringify(runtime)},stylesheet:${JSON.stringify(styles)},stylesheetPath:${JSON.stringify(stylesheetPath)},publicDir:${JSON.stringify(join(config.outDir, "public"))},trustedOrigins:config.trustedOrigins,setup:config.setup,dev:false,prerenderSnapshot:${JSON.stringify(prerenderSnapshot)}});
 app.listen({port:Number(process.env.PORT)||${config.port},hostname:process.env.HOST||${JSON.stringify(config.host)}});
 console.log(\`Brandy listening at \${app.server?.url}\`);
 `;
@@ -151,5 +158,5 @@ console.log(\`Brandy listening at \${app.server?.url}\`);
   await Bun.file(entry).delete();
   await copyDirectory(config.publicDir, join(config.outDir, "public"));
   await Bun.write(join(config.outDir, "prerender-cache.json"), JSON.stringify(prerenderSnapshot, null, 2));
-  await Bun.write(join(config.outDir, "build.json"), JSON.stringify({ version: 1, sourceMtime: await latestMtime([config.appDir, config.styles, config.publicDir, config.configFile]), builtAt: Date.now() }, null, 2));
+  await Bun.write(join(config.outDir, "build.json"), JSON.stringify({ version: 1, sourceMtime: await latestMtime([config.appDir, config.styles, config.publicDir, config.configFile]), builtAt: Date.now(), assets: { runtime: clientPath, stylesheet: stylesheetPath } }, null, 2));
 }

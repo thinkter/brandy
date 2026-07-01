@@ -26,7 +26,7 @@
 
 ### High impact
 
-- [ ] Fingerprint production framework assets and serve them with immutable caching.
+- [x] Fingerprint production framework assets and serve them with immutable caching.
   Emit content-hashed runtime and stylesheet URLs, use `Cache-Control: public, max-age=31536000, immutable`, and document Brotli/gzip support at the server or deployment layer. Development assets should remain uncached.
 
 - [ ] Add explicit static generation and incremental revalidation controls.

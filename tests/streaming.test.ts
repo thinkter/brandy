@@ -262,6 +262,22 @@ test("cold-load streaming flushes the skeleton fast, injects assets into the fir
     // actually delivered to the browser still contains the skeleton's placeholder text
     // (not a broken or empty document) — this is the accepted tradeoff for streaming routes.
     expect(firstChunk + rest).toContain("SKELETON-MARKER");
+
+    const production = await createBrandy({
+      appDir: dir,
+      runtime: "console.log('runtime')",
+      clientPath: "/_brandy/runtime.abcdef123456.js",
+      stylesheet: "body{color:red}",
+      stylesheetPath: "/_brandy/app.123456abcdef.css",
+    });
+    const productionResponse = await production.handle(new Request("http://localhost/"));
+    const productionReader = productionResponse.body!.getReader();
+    const productionFirst = await productionReader.read();
+    const productionFirstChunk = decoder.decode(productionFirst.value, { stream: true });
+    await productionReader.cancel();
+    expect(productionFirstChunk).toContain("/_brandy/runtime.abcdef123456.js");
+    expect(productionFirstChunk).toContain("/_brandy/app.123456abcdef.css");
+    expect(productionFirstChunk).not.toContain("/_brandy/dev.js");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

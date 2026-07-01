@@ -31,6 +31,7 @@ export interface BrandyOptions {
   clientPath?: string;
   alpine?: boolean;
   stylesheet?: string;
+  stylesheetPath?: string;
   publicDir?: string | false;
   dev?: boolean;
   setup?: BrandyConfig["setup"];
@@ -120,6 +121,14 @@ function compiledRuntime(alpine: boolean): Promise<string> {
   return build;
 }
 
+function isFingerprintedAsset(path: string): boolean {
+  return /^\/_brandy\/(?:runtime|app)\.[a-f0-9]{8,64}\.(?:js|css)$/.test(path);
+}
+
+function assetCacheControl(path: string, dev: boolean): string {
+  return !dev && isFingerprintedAsset(path) ? "public, max-age=31536000, immutable" : "no-cache";
+}
+
 export function injectClientRuntime(document: string, clientPath: string): string {
   if (hasElementAttribute(document, "script", "src", clientPath)) return document;
   const script = `<script type="module" src="${escapeAttribute(clientPath)}"></script>`;
@@ -177,6 +186,7 @@ export async function createBrandy(options: BrandyOptions): Promise<Elysia> {
   cacheNotFoundRoute(manifest);
   if (options.prerenderSnapshot) applyRenderSnapshot(options.prerenderSnapshot);
   const clientPath = options.clientPath ?? "/_brandy/runtime.js";
+  const stylesheetPath = options.stylesheetPath ?? "/_brandy/app.css";
   const runtime = options.runtime ?? await compiledRuntime(options.alpine !== false);
   const trustedOrigins = normalizeTrustedOrigins(options.trustedOrigins ?? []);
   const publicDir = options.publicDir ? resolve(options.publicDir) : undefined;
@@ -188,11 +198,11 @@ export async function createBrandy(options: BrandyOptions): Promise<Elysia> {
   if (options.setup) await options.setup(app);
 
   app.get(clientPath, () => new Response(runtime, {
-    headers: { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-cache" },
+    headers: { "content-type": "text/javascript; charset=utf-8", "cache-control": assetCacheControl(clientPath, options.dev === true) },
   }));
 
-  if (options.stylesheet) app.get("/_brandy/app.css", () => new Response(options.stylesheet, {
-    headers: { "content-type": "text/css; charset=utf-8", "cache-control": options.dev ? "no-cache" : "public, max-age=31536000, immutable" },
+  if (options.stylesheet) app.get(stylesheetPath, () => new Response(options.stylesheet, {
+    headers: { "content-type": "text/css; charset=utf-8", "cache-control": assetCacheControl(stylesheetPath, options.dev === true) },
   }));
 
   app.post("/_brandy/actions/*", async ({ request, set }) => {
@@ -303,7 +313,7 @@ export async function createBrandy(options: BrandyOptions): Promise<Elysia> {
       set.headers[STREAM_HEADER] = "1";
       return injectIntoFirstChunk(rendered.stream, (html) => {
         let document = injectClientRuntime(html, clientPath);
-        if (options.stylesheet) document = injectStylesheet(document, "/_brandy/app.css");
+        if (options.stylesheet) document = injectStylesheet(document, stylesheetPath);
         if (options.dev) document = injectDevRuntime(document);
         if (hasInterceptedRoutes) document = injectModalOutlet(document);
         return document;
@@ -311,7 +321,7 @@ export async function createBrandy(options: BrandyOptions): Promise<Elysia> {
     }
     set.status = targetResult.missing ? 404 : rendered.status;
     let document = injectClientRuntime(injectMetadata(rendered.html, rendered.metadata), clientPath);
-    if (options.stylesheet) document = injectStylesheet(document, "/_brandy/app.css");
+    if (options.stylesheet) document = injectStylesheet(document, stylesheetPath);
     if (options.dev) document = injectDevRuntime(document);
     if (hasInterceptedRoutes) document = injectModalOutlet(document);
     return document;

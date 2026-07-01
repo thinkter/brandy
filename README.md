@@ -49,7 +49,7 @@ export default defineConfig({
 
 Server actions reject POSTs whose `Origin` (or, when absent, `Referer`) does not match the request origin. They also reject requests without either header. `trustedOrigins` is empty by default; add only exact HTTP(S) origins that should be allowed to submit actions.
 
-When `styles.css` exists, Brandy compiles it with Tailwind and injects the stylesheet automatically. Files under `public/` are served from root-relative URLs.
+When `styles.css` exists, Brandy compiles it with Tailwind and injects the stylesheet automatically. Production builds fingerprint Brandy's runtime and stylesheet URLs and serve those framework assets with immutable cache headers; compression such as Brotli or gzip should be enabled at your server or CDN layer. Files under `public/` are served from root-relative URLs.
 
 ## File conventions
 
