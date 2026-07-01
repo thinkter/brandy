@@ -1,9 +1,35 @@
 import { access, readdir } from "node:fs/promises";
 import { dirname, join, relative, sep } from "node:path";
 import { buildManifest } from "./core/walker.ts";
-import type { LayoutNode, PageNode } from "./core/types.ts";
+import { keyFor, type RenderCacheEntry } from "./core/cache.ts";
+import { renderFragmentMatch } from "./core/render.ts";
+import type { LayoutNode, PageNode, RouteManifest } from "./core/types.ts";
 import { compileStyles, copyDirectory, latestMtime, resetDirectory, type ResolvedConfig } from "./tooling.ts";
 import { buildClientRuntime } from "./server.ts";
+
+/** Eagerly renders every depth (0..N ancestor layouts) for statically-patterned routes (no
+ * `[id]` segments) that declared `prerender`/`revalidate`, so the very first production request
+ * doesn't pay a cold-cache miss. Routes with dynamic segments populate lazily on first request
+ * instead — there's no `generateStaticParams`-equivalent, since `revalidate` is a time-based
+ * primitive, not an enumeration-based one. */
+async function warmPrerenderCache(manifest: RouteManifest): Promise<Record<string, RenderCacheEntry>> {
+  const snapshot: Record<string, RenderCacheEntry> = {};
+  for (const route of manifest.routes) {
+    const cache = route.page.cache;
+    if (!cache || route.segments.some((segment) => segment.startsWith("["))) continue;
+    const match = { route, pathname: route.pattern, params: {} };
+    for (let shared = 0; shared <= route.layouts.length; shared++) {
+      const chainToRender = route.layouts.slice(shared);
+      // `boundary` is never read by renderFragmentMatch's implementation; any layout satisfies the type.
+      const diff = { current: match, target: match, boundary: route.layouts[0]!, chainToRender };
+      const rendered = await renderFragmentMatch(diff, new Request(`http://brandy.local${route.pattern}`));
+      if (rendered.kind !== "sync" || rendered.status !== 200) continue;
+      const key = keyFor(route.pattern, chainToRender.length, {}, "");
+      snapshot[key] = { html: rendered.html, metadata: rendered.metadata, expiresAt: cache.revalidateSeconds === null ? null : Date.now() + cache.revalidateSeconds * 1000 };
+    }
+  }
+  return snapshot;
+}
 
 async function existing(file: string): Promise<boolean> { try { await access(file); return true; } catch { return false; } }
 const ERROR_FILES = ["error.tsx", "error.ts", "error.jsx", "error.js"];
@@ -86,7 +112,9 @@ export async function buildApplication(config: ResolvedConfig): Promise<void> {
   }
   const pageObjectCode = async (page: PageNode) => {
     const mod = imported(page.file)!;
-    return `{ id:${JSON.stringify(page.id)}, directory:${JSON.stringify(page.directory)}, file:${JSON.stringify(page.file)}, render:${mod}.default, load:${mod}.load, metadata:${mod}.metadata${await boundary(page, ERROR_FILES, "renderError")}${await boundary(page, NOT_FOUND_FILES, "renderNotFound")}${await ownBoundary(page, LOADING_FILES, "renderLoading")} }`;
+    // Unlike render/load/metadata, `cache` is plain data already resolved by buildManifest —
+    // serialize it directly rather than referencing a live export on the imported module.
+    return `{ id:${JSON.stringify(page.id)}, directory:${JSON.stringify(page.directory)}, file:${JSON.stringify(page.file)}, render:${mod}.default, load:${mod}.load, metadata:${mod}.metadata, cache:${JSON.stringify(page.cache)}${await boundary(page, ERROR_FILES, "renderError")}${await boundary(page, NOT_FOUND_FILES, "renderNotFound")}${await ownBoundary(page, LOADING_FILES, "renderLoading")} }`;
   };
   const routes: string[] = [];
   for (const route of manifest.routes) {
@@ -102,6 +130,7 @@ export async function buildApplication(config: ResolvedConfig): Promise<void> {
     const mod = imported(action.file)!;
     return `registerAction(${JSON.stringify(action.id)},${JSON.stringify(action.path)},${JSON.stringify(action.segmentPath)},${JSON.stringify(action.file)},${JSON.stringify(action.name)},${mod}[${JSON.stringify(action.name)}])`;
   });
+  const prerenderSnapshot = await warmPrerenderCache(manifest);
   const serverImport = new URL("./server.ts", import.meta.url).pathname;
   const rootNotFoundModule = imported(await nearest(config.appDir, config.appDir, NOT_FOUND_FILES));
   const source = `${[...imports].map(([file, name]) => `import * as ${name} from ${JSON.stringify(file)};`).join("\n")}
@@ -111,7 +140,7 @@ function registerAction(id,path,segmentPath,file,name,handler){Object.defineProp
 ${actions.join(";\n")}
 const manifest={appDir:${JSON.stringify(config.appDir)},routes:[${routes.join(",\n")}],actions,rootNotFound:${rootNotFoundModule ? `${rootNotFoundModule}.default` : "undefined"}};
 const config=${config.configFile ? `${imported(config.configFile)}.default ?? {}` : "{}"};
-const app=await createBrandy({manifest,alpine:${config.alpine},runtime:${JSON.stringify(runtime)},stylesheet:${JSON.stringify(styles)},publicDir:${JSON.stringify(join(config.outDir, "public"))},trustedOrigins:config.trustedOrigins,setup:config.setup,dev:false});
+const app=await createBrandy({manifest,alpine:${config.alpine},runtime:${JSON.stringify(runtime)},stylesheet:${JSON.stringify(styles)},publicDir:${JSON.stringify(join(config.outDir, "public"))},trustedOrigins:config.trustedOrigins,setup:config.setup,dev:false,prerenderSnapshot:${JSON.stringify(prerenderSnapshot)}});
 app.listen({port:Number(process.env.PORT)||${config.port},hostname:process.env.HOST||${JSON.stringify(config.host)}});
 console.log(\`Brandy listening at \${app.server?.url}\`);
 `;
@@ -121,5 +150,6 @@ console.log(\`Brandy listening at \${app.server?.url}\`);
   if (!result.success) throw new AggregateError(result.logs, "Brandy production build failed");
   await Bun.file(entry).delete();
   await copyDirectory(config.publicDir, join(config.outDir, "public"));
+  await Bun.write(join(config.outDir, "prerender-cache.json"), JSON.stringify(prerenderSnapshot, null, 2));
   await Bun.write(join(config.outDir, "build.json"), JSON.stringify({ version: 1, sourceMtime: await latestMtime([config.appDir, config.styles, config.publicDir, config.configFile]), builtAt: Date.now() }, null, 2));
 }

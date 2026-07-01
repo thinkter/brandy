@@ -1,11 +1,13 @@
 import type {} from "./alpine-jsx.d.ts";
 import { Elysia } from "elysia";
 import { isAbsolute, relative, resolve, sep } from "node:path";
+import { applyRenderSnapshot, renderFragmentMatchCached, renderFragmentMatchFresh, renderFullMatchCached } from "./core/cache.ts";
+import type { RenderCacheEntry } from "./core/cache.ts";
 import { isRevalidation } from "./core/control.ts";
 import { matchRoute } from "./core/diff.ts";
 import { hasElementAttribute, insertBeforeClosingTag } from "./core/html.ts";
 import { escapeAttribute, normalizePathname, slotId } from "./core/path.ts";
-import { injectMetadata, metadataSwap, renderFragmentMatch, renderFullMatch, streamSwap } from "./core/render.ts";
+import { injectMetadata, metadataSwap, renderFragmentMatch, streamSwap } from "./core/render.ts";
 import type { PageNode, Route, RouteDiff, RouteManifest, RouteMatch } from "./core/types.ts";
 import { buildManifest } from "./core/walker.ts";
 import type { BrandyConfig } from "./config.ts";
@@ -35,6 +37,8 @@ export interface BrandyOptions {
   runtime?: string;
   cacheBust?: string;
   trustedOrigins?: string[];
+  /** Build-time-warmed prerender cache entries, loaded at boot. See build.ts. */
+  prerenderSnapshot?: Record<string, RenderCacheEntry>;
 }
 
 function normalizeTrustedOrigins(values: string[]): Set<string> {
@@ -171,6 +175,7 @@ function injectIntoFirstChunk(stream: ReadableStream<Uint8Array>, transform: (ht
 export async function createBrandy(options: BrandyOptions): Promise<Elysia> {
   const manifest = options.manifest ?? await buildManifest(options.appDir ?? "app", options.cacheBust);
   cacheNotFoundRoute(manifest);
+  if (options.prerenderSnapshot) applyRenderSnapshot(options.prerenderSnapshot);
   const clientPath = options.clientPath ?? "/_brandy/runtime.js";
   const runtime = options.runtime ?? await compiledRuntime(options.alpine !== false);
   const trustedOrigins = normalizeTrustedOrigins(options.trustedOrigins ?? []);
@@ -211,7 +216,7 @@ export async function createBrandy(options: BrandyOptions): Promise<Elysia> {
 
     if (request.headers.get(PARTIAL_HEADER) === "1") {
       const diff = diffMatches(current, target);
-      const rendered = await renderFragmentMatch(diff, targetRequest, renderOptions);
+      const rendered = await renderFragmentMatchFresh(diff, targetRequest, renderOptions);
       set.headers[RETARGET_HEADER] = `#${slotId(diff.boundary.id)}`;
       set.headers[RESWAP_HEADER] = "innerHTML";
       if (rendered.kind === "stream") {
@@ -279,7 +284,7 @@ export async function createBrandy(options: BrandyOptions): Promise<Elysia> {
           diff = { current, target: targetResult.match, boundary, chainToRender: targetResult.match.route.layouts.slice(index) };
         }
       }
-      const rendered = await renderFragmentMatch(diff, request, renderOptions);
+      const rendered = await renderFragmentMatchCached(diff, request, renderOptions);
       set.headers[RETARGET_HEADER] = `#${slotId(diff.boundary.id)}`;
       set.headers[RESWAP_HEADER] = "innerHTML";
       set.headers[TARGET_URL_HEADER] = targetPath;
@@ -292,7 +297,7 @@ export async function createBrandy(options: BrandyOptions): Promise<Elysia> {
       set.status = targetResult.missing ? 404 : rendered.status;
       return `${rendered.html}${metadataSwap(rendered.metadata)}${modalClear}`;
     }
-    const rendered = await renderFullMatch(targetResult.match, request, renderOptions);
+    const rendered = await renderFullMatchCached(targetResult.match, request, renderOptions);
     if (rendered.kind === "stream") {
       set.status = targetResult.missing ? 404 : 200;
       set.headers[STREAM_HEADER] = "1";
@@ -314,6 +319,7 @@ export async function createBrandy(options: BrandyOptions): Promise<Elysia> {
   return app;
 }
 
+export * from "./core/cache.ts";
 export * from "./core/control.ts";
 export * from "./core/diff.ts";
 export * from "./core/path.ts";

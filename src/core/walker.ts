@@ -2,7 +2,7 @@ import { readdir } from "node:fs/promises";
 import { join, relative, resolve, sep } from "node:path";
 import type {
   ActionDefinition, ErrorRenderer, InterceptedRoute, LayoutModule, LayoutNode, LoadingRenderer, NotFoundRenderer,
-  PageModule, PageNode, Route, RouteManifest, ServerAction,
+  PageCache, PageModule, PageNode, Route, RouteManifest, ServerAction,
 } from "./types.ts";
 import { routePattern } from "./path.ts";
 
@@ -43,6 +43,18 @@ function sameSegments(a: string[], b: string[]): boolean {
 function firstExisting(directory: string, entries: ReadonlySet<string>, candidates: string[]): string | undefined {
   const name = candidates.find((candidate) => entries.has(candidate));
   return name ? join(directory, name) : undefined;
+}
+
+/** Normalizes a page module's `prerender`/`revalidate` exports into a `PageCache`, or
+ * `undefined` if neither is declared. `revalidate` implies `prerender`. */
+function pageCacheFor(module: Partial<PageModule>, pageFile: string): PageCache | undefined {
+  if (module.prerender === undefined && module.revalidate === undefined) return undefined;
+  if (module.prerender !== undefined && typeof module.prerender !== "boolean") throw new TypeError(`${pageFile} exports \`prerender\`, which must be a boolean`);
+  if (module.revalidate !== undefined && (typeof module.revalidate !== "number" || !Number.isFinite(module.revalidate) || module.revalidate < 0)) {
+    throw new TypeError(`${pageFile} exports \`revalidate\`, which must be a non-negative number of seconds`);
+  }
+  if (module.prerender === false && module.revalidate === undefined) return undefined;
+  return { revalidateSeconds: module.revalidate ?? null };
 }
 
 let importVersion = "";
@@ -150,9 +162,13 @@ async function walkDirectory(
     const module = await importModule(pageFile) as Partial<PageModule>;
     if (typeof module.default !== "function") throw new TypeError(`${pageFile} must default-export a page function`);
     const pattern = routePattern(segments);
+    const cache = pageCacheFor(module, pageFile);
+    if (cache && (ownLoading || layouts.some((layout) => layout.renderLoading))) {
+      throw new Error(`${pageFile} declares \`prerender\`/\`revalidate\`, but the route also has a \`loading.tsx\` boundary — caching and streaming are mutually exclusive`);
+    }
     const page: PageNode = {
       id: `${segmentPath || "root"}/page`, directory, file: pageFile, render: module.default,
-      load: module.load, metadata: module.metadata, renderError, renderNotFound, renderLoading: ownLoading,
+      load: module.load, metadata: module.metadata, renderError, renderNotFound, renderLoading: ownLoading, cache,
     };
     if (interceptFrom) {
       intercepted.push({ targetPattern: pattern, fromSegments: interceptFrom, page });

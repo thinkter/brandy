@@ -3,6 +3,9 @@ import type { Metadata } from "brandy";
 
 export const metadata: Metadata = { title: "About · Brandy" };
 
+// Static content, no per-request data — cache it forever until an action revalidates it.
+export const prerender = true;
+
 export default function About() {
   return (
     <main class="mx-auto max-w-4xl px-5 py-12">

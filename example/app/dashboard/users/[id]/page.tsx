@@ -1,6 +1,9 @@
 import { Html } from "@elysiajs/html";
 import { notFound, type Metadata } from "brandy";
 
+// Cache per-[id] output for 10s at a time — exercises the dynamic-param, lazy-populate path.
+export const revalidate = 10;
+
 export function load({ params }: { params: Record<string, string> }) {
   if (params.id === "missing") notFound();
   if (params.id === "error") throw new Error("User loader failed");

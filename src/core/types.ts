@@ -44,6 +44,10 @@ export interface SegmentModule<T = unknown> {
 
 export interface PageModule<T = unknown> extends SegmentModule<T> {
   default: (props: RenderContext<T>) => RenderResult;
+  /** Cache the rendered output forever, until an action explicitly calls `revalidate()`. Ignored if `revalidate` is also set. */
+  prerender?: boolean;
+  /** Cache the rendered output for this many seconds; recomputed on the first request after expiry. Implies `prerender`. */
+  revalidate?: number;
 }
 
 export interface LayoutModule<T = unknown> extends SegmentModule<T> {
@@ -62,6 +66,11 @@ export interface LayoutNode extends SegmentModule {
   renderLoading?: LoadingRenderer;
 }
 
+export interface PageCache {
+  /** null = cache forever until an action explicitly revalidates it; a number = TTL in seconds. */
+  revalidateSeconds: number | null;
+}
+
 export interface PageNode extends SegmentModule {
   id: string;
   directory: string;
@@ -70,6 +79,7 @@ export interface PageNode extends SegmentModule {
   renderError?: ErrorRenderer;
   renderNotFound?: NotFoundRenderer;
   renderLoading?: LoadingRenderer;
+  cache?: PageCache;
 }
 
 export type ActionResult = Revalidation | void | Response;
