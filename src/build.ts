@@ -6,7 +6,7 @@ import { keyFor, type RenderCacheEntry } from "./core/cache.ts";
 import { renderFragmentMatch } from "./core/render.ts";
 import type { LayoutNode, PageNode, RouteManifest } from "./core/types.ts";
 import { compileStyles, copyDirectory, latestMtime, resetDirectory, type ResolvedConfig } from "./tooling.ts";
-import { buildClientRuntime } from "./server.ts";
+import { buildAlpineChunk, buildClientRuntime, DEFAULT_ALPINE_CHUNK_PATH } from "./server.ts";
 
 /** Eagerly renders every depth (0..N ancestor layouts) for statically-patterned routes (no
  * `[id]` segments) that declared `prerender`/`revalidate`, so the very first production request
@@ -74,7 +74,9 @@ export async function buildApplication(config: ResolvedConfig): Promise<void> {
   const conflicts = assets.filter((path) => path.startsWith("/_brandy/") || manifest.routes.some((route) => !route.pattern.includes(":") && route.pattern === path));
   if (conflicts.length) throw new Error(`Public files conflict with Brandy routes: ${conflicts.join(", ")}`);
   const styles = await compileStyles(config.styles, true);
-  const runtime = await buildClientRuntime(config.alpine);
+  const alpineChunk = config.alpine ? await buildAlpineChunk() : undefined;
+  const alpineChunkPath = alpineChunk ? `/_brandy/alpine.${contentHash(alpineChunk)}.js` : undefined;
+  const runtime = await buildClientRuntime(alpineChunkPath ?? DEFAULT_ALPINE_CHUNK_PATH, false);
   const clientPath = `/_brandy/runtime.${contentHash(runtime)}.js`;
   const stylesheetPath = styles ? `/_brandy/app.${contentHash(styles)}.css` : undefined;
   await resetDirectory(config.outDir);
@@ -147,7 +149,7 @@ function registerAction(id,path,segmentPath,file,name,handler){Object.defineProp
 ${actions.join(";\n")}
 const manifest={appDir:${JSON.stringify(config.appDir)},routes:[${routes.join(",\n")}],actions,rootNotFound:${rootNotFoundModule ? `${rootNotFoundModule}.default` : "undefined"}};
 const config=${config.configFile ? `${imported(config.configFile)}.default ?? {}` : "{}"};
-const app=await createBrandy({manifest,alpine:${config.alpine},clientPath:${JSON.stringify(clientPath)},runtime:${JSON.stringify(runtime)},stylesheet:${JSON.stringify(styles)},stylesheetPath:${JSON.stringify(stylesheetPath)},publicDir:${JSON.stringify(join(config.outDir, "public"))},trustedOrigins:config.trustedOrigins,setup:config.setup,dev:false,prerenderSnapshot:${JSON.stringify(prerenderSnapshot)}});
+const app=await createBrandy({manifest,alpine:${config.alpine},clientPath:${JSON.stringify(clientPath)},runtime:${JSON.stringify(runtime)},alpineChunk:${JSON.stringify(alpineChunk)},alpineChunkPath:${JSON.stringify(alpineChunkPath)},stylesheet:${JSON.stringify(styles)},stylesheetPath:${JSON.stringify(stylesheetPath)},publicDir:${JSON.stringify(join(config.outDir, "public"))},trustedOrigins:config.trustedOrigins,setup:config.setup,dev:false,prerenderSnapshot:${JSON.stringify(prerenderSnapshot)}});
 app.listen({port:Number(process.env.PORT)||${config.port},hostname:process.env.HOST||${JSON.stringify(config.host)}});
 console.log(\`Brandy listening at \${app.server?.url}\`);
 `;
@@ -158,5 +160,5 @@ console.log(\`Brandy listening at \${app.server?.url}\`);
   await Bun.file(entry).delete();
   await copyDirectory(config.publicDir, join(config.outDir, "public"));
   await Bun.write(join(config.outDir, "prerender-cache.json"), JSON.stringify(prerenderSnapshot, null, 2));
-  await Bun.write(join(config.outDir, "build.json"), JSON.stringify({ version: 1, sourceMtime: await latestMtime([config.appDir, config.styles, config.publicDir, config.configFile]), builtAt: Date.now(), assets: { runtime: clientPath, stylesheet: stylesheetPath } }, null, 2));
+  await Bun.write(join(config.outDir, "build.json"), JSON.stringify({ version: 1, sourceMtime: await latestMtime([config.appDir, config.styles, config.publicDir, config.configFile]), builtAt: Date.now(), assets: { runtime: clientPath, stylesheet: stylesheetPath, alpine: alpineChunkPath } }, null, 2));
 }

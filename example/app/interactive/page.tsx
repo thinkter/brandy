@@ -1,6 +1,6 @@
 import { Html } from "@elysiajs/html";
 import type { PropsWithChildren } from "@elysiajs/html";
-import type { Metadata } from "brandy";
+import { Island, type Metadata } from "brandy";
 import { Badge, Card, Code, PageHeader } from "../_components/ui.tsx";
 
 export const metadata: Metadata = { title: "Interactive · Brandy" };
@@ -63,6 +63,7 @@ const gallery = [
 
 export default function InteractivePage() {
   return (
+    <Island>
     <main
       class="mx-auto max-w-6xl px-6 py-16 sm:px-8 lg:px-10 lg:py-20"
       x-data="{
@@ -299,5 +300,6 @@ export default function InteractivePage() {
         </div>
       </div>
     </main>
+    </Island>
   );
 }

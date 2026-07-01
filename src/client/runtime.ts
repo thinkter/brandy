@@ -1,6 +1,9 @@
+declare const __BRANDY_ALPINE_CHUNK__: string;
+declare const __BRANDY_DEV__: boolean;
+
 declare global {
   interface Window {
-    Brandy?: { reinit?: (root: Element) => void };
+    Brandy?: { reinit?: (root: Element) => void; ensureIsland?: (root: ParentNode) => void };
   }
 }
 
@@ -76,7 +79,40 @@ function reconcileStream(root: ParentNode, reinitializeTargets = true): void {
   });
 }
 
+function needsIsland(root: ParentNode): boolean {
+  return root.querySelector("[data-brandy-island]") !== null;
+}
+
+let alpineLoad: Promise<unknown> | undefined;
+
+function ensureAlpine(): Promise<unknown> {
+  return alpineLoad ??= import(__BRANDY_ALPINE_CHUNK__).catch((error: unknown) => {
+    console.error("[brandy] failed to load Alpine", error);
+  });
+}
+
+// Dev-only footgun check: an x-data node outside an Island renders fine but never becomes
+// interactive, since Alpine is only fetched when a data-brandy-island marker is present.
+function warnOrphanIslands(root: ParentNode): void {
+  root.querySelectorAll("[x-data]").forEach((node) => {
+    if (!node.closest("[data-brandy-island]")) {
+      console.warn("[brandy] x-data used outside an <Island> — this element will never become interactive:", node);
+    }
+  });
+}
+
+function ensureIsland(root: ParentNode): void {
+  if (needsIsland(root)) void ensureAlpine();
+  if (__BRANDY_DEV__) warnOrphanIslands(root);
+}
+
+window.Brandy = window.Brandy ?? {};
+window.Brandy.ensureIsland = ensureIsland;
+
+if (needsIsland(document)) void ensureAlpine();
+
 function reinitialize(root: Element): void {
+  ensureIsland(root);
   window.Brandy?.reinit?.(root);
 }
 

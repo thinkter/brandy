@@ -1,4 +1,5 @@
 import { Html } from "@elysiajs/html";
+import { Island } from "brandy";
 
 export type HomeData = {
   renderedAt: string;
@@ -105,27 +106,29 @@ export function HomeServerData({ data }: { data: HomeData }) {
 
 export function HomeClientState() {
   return (
-    <section
-      class="rounded border border-zinc-800 bg-zinc-900/30 p-5"
-      x-data="{ count: 0, open: true }"
-    >
-      <div class="flex items-center justify-between">
-        <p class="text-sm font-semibold">Client-side state</p>
-        <button class="text-sm underline" x-on:click="open = !open">
-          Toggle
-        </button>
-      </div>
-      <div class="mt-4 flex items-center gap-3" x-show="open" x-cloak="">
-        <button
-          class="rounded bg-zinc-100 px-3 py-1.5 text-zinc-950"
-          x-on:click="count++"
-        >
-          +
-        </button>
-        <span>
-          Alpine count: <strong x-text="count">0</strong>
-        </span>
-      </div>
-    </section>
+    <Island>
+      <section
+        class="rounded border border-zinc-800 bg-zinc-900/30 p-5"
+        x-data="{ count: 0, open: true }"
+      >
+        <div class="flex items-center justify-between">
+          <p class="text-sm font-semibold">Client-side state</p>
+          <button class="text-sm underline" x-on:click="open = !open">
+            Toggle
+          </button>
+        </div>
+        <div class="mt-4 flex items-center gap-3" x-show="open" x-cloak="">
+          <button
+            class="rounded bg-zinc-100 px-3 py-1.5 text-zinc-950"
+            x-on:click="count++"
+          >
+            +
+          </button>
+          <span>
+            Alpine count: <strong x-text="count">0</strong>
+          </span>
+        </div>
+      </section>
+    </Island>
   );
 }

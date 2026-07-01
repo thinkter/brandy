@@ -109,7 +109,7 @@ test("partial navigation couples fragment and target headers", async () => {
   expect(html).not.toContain('/_brandy/runtime.js');
 });
 
-test("client runtime is compiled browser JavaScript", async () => {
+test("client runtime is compiled browser JavaScript, and never bundles Alpine", async () => {
   const app = await createBrandy({ appDir });
   const response = await app.handle(new Request("http://localhost/_brandy/runtime.js"));
   expect(response.headers.get("content-type")).toContain("text/javascript");
@@ -117,7 +117,19 @@ test("client runtime is compiled browser JavaScript", async () => {
   expect(source).toContain("x-brandy-navigation");
   expect(source).not.toContain("declare global");
   expect(source).toContain("popstate");
-  expect(source).toContain("Alpine Expression Error");
+  expect(source).not.toContain("Alpine Expression Error");
+});
+
+test("the Alpine chunk is served lazily and only when alpine is enabled", async () => {
+  const enabled = await createBrandy({ appDir });
+  const enabledResponse = await enabled.handle(new Request("http://localhost/_brandy/alpine.js"));
+  expect(enabledResponse.status).toBe(200);
+  expect(enabledResponse.headers.get("content-type")).toContain("text/javascript");
+  expect(await enabledResponse.text()).toContain("Alpine Expression Error");
+
+  const disabled = await createBrandy({ appDir, alpine: false });
+  const disabledResponse = await disabled.handle(new Request("http://localhost/_brandy/alpine.js"));
+  expect(disabledResponse.status).toBe(404);
 });
 
 test("Alpine can be disabled without disabling Brandy navigation", async () => {
@@ -128,11 +140,19 @@ test("Alpine can be disabled without disabling Brandy navigation", async () => {
   expect(source).not.toContain("Alpine Expression Error");
 });
 
-test("the example uses Alpine without a custom client entrypoint", async () => {
+test("the example uses Alpine islands without a custom client entrypoint", async () => {
   const app = await createBrandy({ appDir });
   const html = await (await app.handle(new Request("http://localhost/"))).text();
+  expect(html).toContain("data-brandy-island");
   expect(html).toContain('x-data="{ count: 0, open: true }"');
   expect(html).toContain('x-on:click="count++"');
+});
+
+test("Island renders an explicit data-brandy-island boundary", async () => {
+  const { Island } = await import("brandy");
+  const html = String(Island({ children: "<span>hi</span>" as unknown as JSX.Element }));
+  expect(html).toContain("data-brandy-island");
+  expect(html).toContain("<span>hi</span>");
 });
 
 test("development cache busting preserves server action URLs", async () => {
