@@ -3,6 +3,7 @@ import { Elysia } from "elysia";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import { isRevalidation } from "./core/control.ts";
 import { matchRoute } from "./core/diff.ts";
+import { hasElementAttribute, insertBeforeClosingTag } from "./core/html.ts";
 import { escapeAttribute, normalizePathname, slotId } from "./core/path.ts";
 import { injectMetadata, metadataSwap, renderFragmentMatch, renderFullMatch, streamSwap } from "./core/render.ts";
 import type { PageNode, Route, RouteDiff, RouteManifest, RouteMatch } from "./core/types.ts";
@@ -116,27 +117,27 @@ function compiledRuntime(alpine: boolean): Promise<string> {
 }
 
 export function injectClientRuntime(document: string, clientPath: string): string {
-  if (document.includes(`src="${clientPath}"`) || document.includes(`src='${clientPath}'`)) return document;
+  if (hasElementAttribute(document, "script", "src", clientPath)) return document;
   const script = `<script type="module" src="${escapeAttribute(clientPath)}"></script>`;
-  return document.includes("</body>") ? document.replace("</body>", `${script}</body>`) : `${document}${script}`;
+  return insertBeforeClosingTag(document, "body", script) ?? `${document}${script}`;
 }
 
 function injectStylesheet(document: string, stylesheet: string): string {
-  if (document.includes(`href="${stylesheet}"`) || document.includes(`href='${stylesheet}'`)) return document;
+  if (hasElementAttribute(document, "link", "href", stylesheet)) return document;
   const link = `<link rel="stylesheet" href="${escapeAttribute(stylesheet)}">`;
-  return document.includes("</head>") ? document.replace("</head>", `${link}</head>`) : `${link}${document}`;
+  return insertBeforeClosingTag(document, "head", link) ?? `${link}${document}`;
 }
 
 function injectDevRuntime(document: string): string {
-  if (document.includes("/_brandy/dev.js")) return document;
+  if (hasElementAttribute(document, "script", "src", "/_brandy/dev.js")) return document;
   const script = `<script type="module" src="/_brandy/dev.js"></script>`;
-  return document.includes("</body>") ? document.replace("</body>", `${script}</body>`) : `${document}${script}`;
+  return insertBeforeClosingTag(document, "body", script) ?? `${document}${script}`;
 }
 
 function injectModalOutlet(document: string): string {
-  if (document.includes(`id="${MODAL_OUTLET_ID}"`)) return document;
+  if (hasElementAttribute(document, undefined, "id", MODAL_OUTLET_ID)) return document;
   const div = `<div id="${MODAL_OUTLET_ID}" data-brandy-slot></div>`;
-  return document.includes("</body>") ? document.replace("</body>", `${div}</body>`) : `${document}${div}`;
+  return insertBeforeClosingTag(document, "body", div) ?? `${document}${div}`;
 }
 
 /** Appends one more chunk after a stream finishes — used to attach the modal-outlet-clear

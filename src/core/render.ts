@@ -1,4 +1,5 @@
 import { NotFoundError } from "./control.ts";
+import { findClosingTag, insertBeforeClosingTag } from "./html.ts";
 import { escapeAttribute, slotId, streamId } from "./path.ts";
 import type {
   LayoutNode, LoadedRoute, Metadata, MetadataExport, PageNode, RenderContext,
@@ -136,13 +137,8 @@ function inlineMetaSwap(metadata: Metadata): string {
 }
 
 function splitDocumentClosing(document: string): { shell: string; closing: string } {
-  const closingTag = /<\/(?:body|html)\s*>/gi;
-  let bodyIndex = -1;
-  let htmlIndex = -1;
-  for (const match of document.matchAll(closingTag)) {
-    if (match[0].toLowerCase().startsWith("</body")) bodyIndex = match.index;
-    else htmlIndex = match.index;
-  }
+  const bodyIndex = findClosingTag(document, "body");
+  const htmlIndex = findClosingTag(document, "html");
   const index = bodyIndex >= 0 ? bodyIndex : htmlIndex;
   return index >= 0
     ? { shell: document.slice(0, index), closing: document.slice(index) }
@@ -237,7 +233,7 @@ function metaTags(metadata: Metadata): string {
 
 export function injectMetadata(document: string, metadata: Metadata): string {
   const tags = metaTags(metadata);
-  return document.includes("</head>") ? document.replace("</head>", `${tags}</head>`) : `${tags}${document}`;
+  return insertBeforeClosingTag(document, "head", tags) ?? `${tags}${document}`;
 }
 
 export function metadataSwap(metadata: Metadata, mode: "replace" | "merge" = "replace"): string {
