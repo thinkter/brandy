@@ -1,7 +1,7 @@
 # Brandy — Product Requirements Document
 
-**Status:** Draft v0.1
-**Last updated:** 2026-06-30
+**Status:** Draft v0.2
+**Last updated:** 2026-07-02
 **Owner:** @thinkter
 **One-liner:** Next.js App Router conventions, delivered as HTML over the wire — no React, no RSC.
 
@@ -42,6 +42,10 @@ This is a **deliberately narrow niche**, and that is acknowledged as a risk (see
 | Turbo / Hotwire | Explicit `<turbo-frame>` | Tiny | Routing & targets derived from FS, not hand-tagged |
 | htmx (raw) | None (per-element) | Tiny | Adds structure, conventions, derived targeting |
 | Datastar | None (signals + SSE) | ~14kb | Adds App Router conventions; different scope |
+| Astro | FS-based, islands | ~0 by default | Persistent layouts + partial navigation; Astro re-renders whole pages |
+| SvelteKit | FS-based, nested layouts | Svelte runtime | HTML over the wire; no compiler, no client framework |
+
+In practice the competition is less htmx than Astro and SvelteKit — the frameworks people actually reach for when leaving React. Against those, Brandy's differentiator is specifically persistent nested layouts with *derived* partial navigation, not merely "less JavaScript."
 
 ## 4. Goals / Non-Goals
 
@@ -87,14 +91,14 @@ Cold load (no partial-nav header) renders the full document top-to-bottom; soft 
 
 ## 7. Technical Stack
 
-- **Runtime:** Bun
-- **Server framework:** Elysia
+- **Build tool & dev runtime:** Bun
+- **Request runtime:** Brandy's own portable `BrandyApplication` router (Fetch request → response), emitted per deployment adapter: Bun standalone, Cloudflare Workers, Vercel Node/Edge.
 - **Templating:** server-side JSX via `@elysiajs/html` (returns strings; no hydration)
 - **Styling:** Tailwind CSS
-- **Client interactivity (adopted, not built):** Alpine.js, bundled and started by default; set `alpine: false` to opt out while keeping Brandy navigation.
+- **Client interactivity (adopted, not built):** Alpine.js, delivered lazily per `<Island>` boundary; set `alpine: false` to opt out while keeping Brandy navigation.
 - **Transport:** HTML fragments over HTTP, htmx-style swapping (via Brandy's own thin runtime).
 
-Note: Brandy is a layer *on top of* Elysia's explicit router. A boot-time walker derives the route table and registers routes programmatically. Elysia's headline feature (Eden typed RPC) is intentionally not used on the client; its value is retained server-side between loader and template.
+Note: Brandy originally sat on top of Elysia's explicit router; it now owns a minimal portable request runtime so one build pipeline can target Bun, Cloudflare, and Vercel (see D5). Server JSX still renders through `@elysiajs/html`'s runtime, and typed RPC is intentionally not offered on the client; type safety is retained server-side between loader and template.
 
 ## 8. Architecture
 
@@ -146,7 +150,7 @@ Priorities: **P0** = core spine (a thing that navigates). **P1** = makes it usab
 
 | # | Feature | Requirement |
 |---|---|---|
-| 17 | Streaming `loading` states | Skeleton instantly, stream resolved content into the same slot via Elysia async generators. Biggest gap-closer vs. Next. |
+| 17 | Streaming `loading` states | Skeleton instantly, stream resolved content into the same slot via streamed responses. Biggest gap-closer vs. Next. |
 | 18 | Intercepting routes | Modal-over-list: same URL = modal on soft-nav, standalone page on hard load. The flagship "holy crap" demo. |
 | 19 | Parallel routes | Independent outlets with their own URLs; one nav → primary swap + OOB swaps. Hairy; build dead last. |
 | 20 | Prefetch on hover | Warm the next fragment before the click. |
@@ -183,6 +187,7 @@ The framework sees the `action` reference, generates the POST route, and wires t
 - **D2 — Adopt client reactivity; never build it.** Client-state interactivity is delegated to a dependency (Alpine or signals), permanently. The framework's navigation runtime stays reactivity-agnostic and communicates with the dependency only through the DOM, via one re-init hook on each swap. This keeps the door open to swapping the dependency later at the cost of exactly one rule — not an abstraction layer.
 - **D3 — Alpine by default.** Alpine is the adopted client-state dependency and is bundled and started by default. Applications can set `alpine: false` to retain Brandy navigation without Alpine.
 - **D4 — Back/forward is a re-diff, not a snapshot restore.** History is handled by re-diffing against the popped URL because htmx's snapshot cache has no knowledge of the layout hierarchy.
+- **D5 — Own the request runtime; keep Bun as the build tool.** Brandy replaced Elysia with a minimal portable router (`BrandyApplication`) so production handlers can target Bun, Cloudflare Workers, and Vercel Functions from one build pipeline. `@elysiajs/html`'s JSX runtime is retained for templating; Eden RPC was never used (see D1).
 
 ## 12. Risks & Open Questions
 
@@ -190,15 +195,18 @@ The framework sees the `action` reference, generates the POST route, and wires t
 - **Cultural headwind.** htmx culture prizes locality-of-behavior (explicit per-element wiring) and may view FS-derived magic as a bug, not a feature. Brandy is betting against that preference.
 - **The double-render discipline.** Every template must render correctly both naked (partial) and full-wrapped (cold). Easy to author a template that only works one way; this is a footgun to mitigate with conventions/tooling.
 - **Back-button correctness.** History over partial navigation is the sharpest technical edge; getting it wrong produces mysterious bugs.
-- **"Files, no plumbing" only holds for navigation/data.** The moment a developer needs client interactivity, attributes (plumbing) reappear via the adopted library. The promise must be scoped honestly in docs.
+- **"Files, no plumbing" only holds for navigation/data.** The moment a developer needs client interactivity, attributes (plumbing) reappear via the adopted library — and Brandy itself now ships three per-element escape hatches (`data-brandy-reload`, `data-brandy-no-prefetch`, `data-brandy-no-intercept`). The promise must be scoped honestly in docs.
 - **Dependency swap cost (D3).** Keep the seam (D2) clean so opting out of Alpine or adopting another client-state library remains practical as features grow.
+- **Caching vs. personalization.** `prerender`/`revalidate` cache whole documents including ancestor layouts, and loaders receive the full `Request`. Until Brandy detects dynamic request usage, a cached route that reads cookies or auth headers serves one user's page to everyone. The target user builds logged-in dashboards, so specifying this boundary precisely is itself a differentiator, not just a bug to fix (tracked in GitHub issues).
+- **Streaming punches a hole in the no-JS guarantee.** Deferred `loading.tsx` content arrives as script-applied swaps; a no-JS cold load shows the skeleton forever. This must become either a documented, scoped exception to principle 4 or a solved problem — not an unstated surprise.
+- **Auth story is undefined.** Loaders cannot redirect and there is no middleware concept, so "unauthenticated → /login" — the first need of the target user — has no supported path yet (tracked in GitHub issues).
 
 ## 13. Milestones / Roadmap
 
-- **M0 — The heart.** Diff engine (#2) as a standalone, unit-tested pure function. Nasty cases covered: trailing slashes, index vs. named segments, dynamic params changing mid-chain, root-level navigation.
-- **M1 — It navigates.** Features 1–6 wired together; a multi-segment app navigates with persistent layouts and a no-JS fallback.
-- **M2 — It's usable.** Loaders (7), back/forward (8), metadata (9), mutations (10), error boundaries (11), 404 (12), dynamic params (13), dependency adopted (14–15).
-- **M3 — It's "nailed."** Differentiators (17–21), led by streaming loading states and intercepting-route modals as the flagship demo.
+- **M0 — The heart.** Diff engine (#2) as a standalone, unit-tested pure function. Nasty cases covered: trailing slashes, index vs. named segments, dynamic params changing mid-chain, root-level navigation. — **Shipped.**
+- **M1 — It navigates.** Features 1–6 wired together; a multi-segment app navigates with persistent layouts and a no-JS fallback. — **Shipped.**
+- **M2 — It's usable.** Loaders (7), back/forward (8), metadata (9), mutations (10), error boundaries (11), 404 (12), dynamic params (13), dependency adopted (14–15). — **Shipped.**
+- **M3 — It's "nailed."** Differentiators (17–21), led by streaming loading states and intercepting-route modals as the flagship demo. — **In progress:** streaming (17), intercepting routes (18), prefetch (20), and dev file-watching (21) have shipped; parallel routes (19) remain (see TODO.md). Hardening the shipped surface against the issues from the 2026-07-02 audit takes priority over new differentiators.
 
 ## 14. Brand & Aesthetic
 
