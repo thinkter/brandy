@@ -47,6 +47,27 @@ function firstExisting(directory: string, entries: ReadonlySet<string>, candidat
 
 let importVersion = "";
 
+/** Tracks which action path each handler function has already been assigned, so repeated
+ * manifest builds (e.g. overlapping dev rebuilds importing the same cached module) don't
+ * blindly re-run `Object.defineProperty` on a shared function object, and so two different
+ * routes accidentally resolving to the same handler identity fail loudly instead of one
+ * path silently overwriting the other. */
+const actionPathsByHandler = new WeakMap<Function, string>();
+
+/** `@kitajs/html` (the JSX runtime app code imports directly) stringifies attribute values
+ * with a plain `value.toString()` call when rendering `action={handler}`. Brandy never sees
+ * that call, so the only way to make a handler render as its `/_brandy/actions/...` URL is to
+ * override `toString` on the function object itself rather than on some wrapper we control. */
+function bindActionPath(handler: Function, path: string): void {
+  const existing = actionPathsByHandler.get(handler);
+  if (existing === path) return;
+  if (existing !== undefined) {
+    throw new Error(`Server action handler is already bound to ${existing}; cannot also bind it to ${path}. Each action must be a distinct function.`);
+  }
+  actionPathsByHandler.set(handler, path);
+  Object.defineProperty(handler, "toString", { configurable: true, value: () => path });
+}
+
 async function importModule(file: string): Promise<Record<string, unknown>> {
   return import(`${file}${importVersion}`) as Promise<Record<string, unknown>>;
 }
@@ -82,10 +103,10 @@ async function loadActions(file: string | undefined, segmentPath: string, action
     const handler = value as ServerAction;
     const id = `${segmentPath || "root"}:${name}`;
     const path = `/_brandy/actions/${Buffer.from(id).toString("base64url")}`;
-    Object.defineProperty(handler, "toString", { configurable: true, value: () => path });
+    bindActionPath(handler, path);
     const canonicalHandler = canonicalModule[name];
     if (typeof canonicalHandler === "function" && canonicalHandler !== handler) {
-      Object.defineProperty(canonicalHandler, "toString", { configurable: true, value: () => path });
+      bindActionPath(canonicalHandler, path);
     }
     actions.set(path, { id, path, segmentPath, file, name, handler });
   }
