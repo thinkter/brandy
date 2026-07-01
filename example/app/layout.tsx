@@ -22,6 +22,7 @@ export default function RootLayout({ children }: { children: JSX.Element }) {
             <nav class="flex gap-5 text-sm">
               <a href="/">Home</a>
               <a href="/dashboard">Dashboard</a>
+              <a href="/notes">Notes</a>
               <a href="/server">Server</a>
               <a href="/components">Components</a>
               <a href="/interactive">Interactive</a>
