@@ -14,7 +14,7 @@ export const getServerSnapshot = memoizeLoader(async () => {
 
   return {
     sampleId: crypto.randomUUID().slice(0, 8),
-    runtime: `Bun ${Bun.version}`,
+    runtime: `Node ${process.version}`,
     platform: `${platform()} / ${process.arch}`,
     host: hostname(),
     uptime: formatDuration(process.uptime()),
@@ -27,7 +27,7 @@ export const getServerSnapshot = memoizeLoader(async () => {
 });
 
 export async function getServerActivity() {
-  await Bun.sleep(20);
+  await new Promise((resolve) => setTimeout(resolve, 20));
   return [
     { label: "Read package manifest", source: "node:fs/promises" },
     { label: "Inspected process memory", source: "process.memoryUsage()" },

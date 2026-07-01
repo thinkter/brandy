@@ -195,7 +195,7 @@ test("server-only loaders can use filesystem and process APIs", async () => {
   const response = await app.handle(new Request("http://localhost/server"));
   const html = await response.text();
   expect(response.status).toBe(200);
-  expect(html).toContain(`Bun ${Bun.version}`);
+  expect(html).toContain(`Node ${process.version}`);
   expect(html).toContain("node:fs/promises");
   expect(html).toContain("Functions that never reach the browser");
 });

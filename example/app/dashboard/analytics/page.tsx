@@ -4,7 +4,7 @@ import type { Metadata, RenderContext } from "brandy";
 export const metadata: Metadata = { title: "Analytics · Brandy" };
 
 export async function load() {
-  await Bun.sleep(4000);
+  await new Promise((resolve) => setTimeout(resolve, 4000));
   return { visitors: 1284, loadedAt: new Date().toISOString() };
 }
 

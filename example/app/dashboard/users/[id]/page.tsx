@@ -1,8 +1,8 @@
 import { Html } from "@elysiajs/html";
 import { notFound, type Metadata } from "brandy";
 
-// Cache per-[id] output for 10s at a time — exercises the dynamic-param, lazy-populate path.
-export const revalidate = 10;
+// Dynamic param route rendered on demand. Vercel's serverless runtime has no
+// durable cache, so `revalidate` is unavailable here — see brandy/adapters.
 
 export function load({ params }: { params: Record<string, string> }) {
   if (params.id === "missing") notFound();
