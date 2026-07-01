@@ -2,7 +2,7 @@
 
 ## Should fix soon
 
-- [ ] Design explicit client/server boundaries and per-island runtime delivery.
+- [x] Design explicit client/server boundaries and per-island runtime delivery.
   Server-rendered TSX should remain the default, and completely static routes should not download Alpine. Add an explicit opt-in boundary, inspired by Astro islands and Next.js `"use client"`, so an interactive component can request its client runtime without making the rest of the page hydratable. Keep Brandy's navigation runtime independently configurable, define how island state behaves across fragment swaps, and evaluate whether the first version should initialize Alpine islands only or also support true component hydration.
 
 - [x] Avoid mutating shared action-handler function objects in `loadActions` ([`src/core/walker.ts`](/home/ashman/Documents/opensource/brandy/src/core/walker.ts)).
@@ -19,6 +19,9 @@
 
 ## Feature roadmap
 
+- [x] Separate the Bun build toolchain from portable deployment runtimes.
+  Keep route discovery, Tailwind, bundling, filesystem access, and subprocesses at build time. Emit Bun standalone, Cloudflare Worker, Vercel Node, and Vercel Edge Fetch handlers with platform-native static assets and explicit serverless cache constraints.
+
 - [ ] Parallel routes (`@slotname` outlets).
   The PRD's own P2 table calls this one "hairy, build dead last" — do it after everything else here is settled. Before starting: reassess scope against what intercepting routes just shipped. The original plan assumed parallel routes needed a new multi-target OOB wire mechanism (`data-brandy-outlet` templates, one per slot) that intercepting routes would then reuse for its modal. In practice, intercepting routes shipped by reusing the *existing* single-target retarget/reswap protocol unchanged (just pointing it at a different reserved selector) plus the streaming OOB template for the "clear" case — no new protocol was needed. Parallel routes may be able to lean on the same trick (each slot is just another reserved, auto-injected element id, retargeted independently) rather than requiring a genuinely new multi-outlet wire format; confirm this before designing the wire protocol from scratch. Also still open from the original plan: whether slots are co-resolved only (update because the primary route changed) or independently navigable via their own links/URLs — the latter needs real new state (client-side per-slot tracking, a `default.tsx` fallback convention, and a decision on whether slot state survives a hard refresh) and is a much bigger scope than the former.
 
@@ -29,11 +32,14 @@
 - [x] Fingerprint production framework assets and serve them with immutable caching.
   Emit content-hashed runtime and stylesheet URLs, use `Cache-Control: public, max-age=31536000, immutable`, and document Brotli/gzip support at the server or deployment layer. Development assets should remain uncached.
 
-- [ ] Add explicit static generation and incremental revalidation controls.
+- [x] Add explicit static generation and incremental revalidation controls.
   Support route exports such as `prerender = true` and `revalidate = 60` rather than guessing whether a loader is static. Precompute both complete documents and the fragments needed for soft navigation, with clear behavior for dynamic params, actions, errors, and authenticated requests.
 
-- [ ] Add request-scoped loader memoization, followed by an explicit cross-request cache API.
-  Deduplicate identical work within one render first. A shared cache should require explicit keys, lifetimes, tags, and invalidation such as `revalidateTag`, and must prevent personalized or authenticated data from leaking between requests.
+- [x] Add request-scoped loader memoization.
+  Deduplicate identical work within one render without sharing personalized or authenticated data between requests.
+
+- [ ] Add an explicit cross-request cache API.
+  A shared cache should require explicit keys, lifetimes, tags, and invalidation such as `revalidateTag`.
 
 - [ ] Generalize route-level loading boundaries into server islands.
   Allow independently rendered server content to stream into a cached or already-rendered shell with a fallback. Define cold-load, partial-navigation, failure, metadata, and no-JavaScript behavior before exposing the API.

@@ -2,10 +2,11 @@ import { expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
-  buildManifest, createMemoryRenderCache, keyFor,
+  createMemoryRenderCache, keyFor,
   renderFragmentMatchCached, renderFragmentMatchFresh, renderFullMatchCached,
   type LayoutNode, type PageNode, type Route, type RouteDiff, type RouteMatch,
 } from "brandy";
+import { buildManifest } from "brandy/build";
 
 function syncHtml(rendered: Awaited<ReturnType<typeof renderFullMatchCached>>): string {
   if (rendered.kind !== "sync") throw new Error("expected a synchronous render");

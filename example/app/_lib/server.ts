@@ -1,9 +1,10 @@
 import { readFile, stat } from "node:fs/promises";
 import { hostname, platform } from "node:os";
+import { memoizeLoader } from "brandy";
 
 const packageFile = new URL("../../../package.json", import.meta.url);
 
-export async function getServerSnapshot() {
+export const getServerSnapshot = memoizeLoader(async () => {
   const [source, details] = await Promise.all([
     readFile(packageFile, "utf8"),
     stat(packageFile),
@@ -12,6 +13,7 @@ export async function getServerSnapshot() {
   const memory = process.memoryUsage();
 
   return {
+    sampleId: crypto.randomUUID().slice(0, 8),
     runtime: `Bun ${Bun.version}`,
     platform: `${platform()} / ${process.arch}`,
     host: hostname(),
@@ -22,7 +24,7 @@ export async function getServerSnapshot() {
     manifestUpdatedAt: details.mtime.toISOString(),
     renderedAt: new Date().toISOString(),
   };
-}
+});
 
 export async function getServerActivity() {
   await Bun.sleep(20);

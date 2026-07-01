@@ -1,6 +1,6 @@
 import { access, mkdir, readdir, rm, stat } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
-import type { BrandyConfig } from "./config.ts";
+import { defaultAdapter, type BrandyConfig } from "./config.ts";
 
 export interface ResolvedConfig extends Required<Omit<BrandyConfig, "setup">> {
   root: string;
@@ -31,6 +31,7 @@ export async function loadConfig(root = process.cwd(), version?: string): Promis
     styles: value.styles === false ? false : path(value.styles ?? "styles.css"),
     alpine: value.alpine ?? true, port: value.port ?? 3000, host: value.host ?? "localhost",
     trustedOrigins: value.trustedOrigins ?? [],
+    adapter: value.adapter ?? defaultAdapter,
     setup: value.setup, configFile,
   };
 }

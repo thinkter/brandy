@@ -1,6 +1,6 @@
 import { watch } from "node:fs";
 import { basename, dirname, relative, sep } from "node:path";
-import { createBrandy } from "./server.ts";
+import { createDevelopmentApp } from "./development.ts";
 import { compileStyles, loadConfig, type ResolvedConfig } from "./tooling.ts";
 
 const DEV_CLIENT = `
@@ -24,7 +24,7 @@ export async function runDev(initialConfig: ResolvedConfig): Promise<never> {
       cancel(controller) { clients.delete(controller as unknown as ReadableStreamDefaultController); },
     }), { headers: { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" } }));
   };
-  let current = await createBrandy({ appDir: config.appDir, alpine: config.alpine, stylesheet: styles, publicDir: config.publicDir, trustedOrigins: config.trustedOrigins, dev: true, setup, cacheBust: String(version) });
+  let current = await createDevelopmentApp({ appDir: config.appDir, alpine: config.alpine, stylesheet: styles, stylesheetPath: styles ? "/_brandy/app.css" : undefined, publicDir: config.publicDir, trustedOrigins: config.trustedOrigins, dev: true, setup, cacheBust: String(version) });
   const port = config.port; const hostname = config.host;
   const server = Bun.serve({ port, hostname, fetch: (request) => current.handle(request) });
   console.log(`Brandy dev server at ${server.url}`);
@@ -42,7 +42,7 @@ export async function runDev(initialConfig: ResolvedConfig): Promise<never> {
         const changed = filename.split(sep).join("/");
         if (config.styles && changed === relative(config.root, config.styles).split(sep).join("/")) {
           styles = await compileStyles(config.styles, false);
-          current = await createBrandy({ appDir: config.appDir, alpine: config.alpine, stylesheet: styles, publicDir: config.publicDir, trustedOrigins: config.trustedOrigins, dev: true, setup, cacheBust: String(version) });
+          current = await createDevelopmentApp({ appDir: config.appDir, alpine: config.alpine, stylesheet: styles, stylesheetPath: styles ? "/_brandy/app.css" : undefined, publicDir: config.publicDir, trustedOrigins: config.trustedOrigins, dev: true, setup, cacheBust: String(version) });
           send("css"); return;
         }
         version++;
@@ -51,7 +51,7 @@ export async function runDev(initialConfig: ResolvedConfig): Promise<never> {
           config = await loadConfig(config.root, String(version));
           styles = await compileStyles(config.styles, false);
         }
-        current = await createBrandy({ appDir: config.appDir, alpine: config.alpine, stylesheet: styles, publicDir: config.publicDir, trustedOrigins: config.trustedOrigins, dev: true, setup, cacheBust: String(version) });
+        current = await createDevelopmentApp({ appDir: config.appDir, alpine: config.alpine, stylesheet: styles, stylesheetPath: styles ? "/_brandy/app.css" : undefined, publicDir: config.publicDir, trustedOrigins: config.trustedOrigins, dev: true, setup, cacheBust: String(version) });
         if (changed.startsWith("brandy.config.") || !changed.startsWith(`${relative(config.root, config.appDir).split(sep).join("/")}/`)) send("reload");
         else if (/^layout\.[jt]sx?$/.test(name)) {
           const segment = relative(config.appDir, dirname(`${config.root}/${changed}`)).split(sep).join("/");

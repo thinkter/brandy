@@ -2,9 +2,10 @@ import { expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
-  createBrandy, renderFragmentMatch, renderFullMatch,
+  memoizeLoader, renderFragmentMatch, renderFullMatch,
   type LayoutNode, type PageNode, type Route, type RouteDiff, type RouteMatch,
 } from "brandy";
+import { createDevelopmentApp as createBrandy } from "brandy/build";
 
 const appDir = new URL("../example/app", import.meta.url).pathname;
 
@@ -57,6 +58,33 @@ test("the skeleton streams before the loader resolves, real content after", asyn
   expect(document.match(/<\/body>/g)).toHaveLength(1);
   expect(document.match(/<\/html>/g)).toHaveLength(1);
   expect(document.indexOf("real data")).toBeLessThan(document.indexOf("</body>"));
+});
+
+test("streaming ancestor and deferred loaders share one memoization scope", async () => {
+  let calls = 0;
+  const getShared = memoizeLoader(async () => {
+    calls++;
+    return "shared data";
+  });
+  const root: LayoutNode = {
+    id: "root", directory: "/app", file: "/app/layout.tsx", load: () => getShared(),
+    render: ({ children, data }) => `<html><body data-root="${data}">${children}</body></html>` as JSX.Element,
+  };
+  const page: PageNode = {
+    id: "root/page", directory: "/app", file: "/app/page.tsx", load: () => getShared(),
+    render: ({ data }) => `<main>${data}</main>` as JSX.Element,
+    renderLoading: () => `<main>SKELETON</main>` as JSX.Element,
+  };
+  const route: Route = { id: "/", pattern: "/", segments: [], layouts: [root], page, pageFile: page.file, renderPage: page.render };
+  const match: RouteMatch = { route, pathname: "/", params: {} };
+
+  const rendered = await renderFullMatch(match, new Request("http://localhost/"));
+  if (rendered.kind !== "stream") throw new Error("expected a streaming render");
+  const html = await new Response(rendered.stream).text();
+
+  expect(calls).toBe(1);
+  expect(html).toContain('data-root="shared data"');
+  expect(html).toContain("shared data");
 });
 
 test("a loader error after the skeleton ships stays status 200 and renders the boundary in-band", async () => {

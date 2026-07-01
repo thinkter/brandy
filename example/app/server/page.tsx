@@ -29,6 +29,14 @@ export default function ServerPage({ data }: { data: ServerData }) {
         <span class="text-sm text-zinc-500">at {data.snapshot.renderedAt}</span>
       </div>
 
+      <Card title="Request-scoped memoization" class="mt-6">
+        <p class="text-sm leading-6 text-zinc-400">
+          Both <Code>server/layout.tsx</Code> and <Code>server/page.tsx</Code> call
+          <Code>getServerSnapshot()</Code>. Brandy executes it once for this render and both loaders
+          receive sample <Code>{data.snapshot.sampleId}</Code>.
+        </p>
+      </Card>
+
       <Card title="Live process snapshot" class="mt-6">
         <dl class="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
           <Stat label="Runtime" value={data.snapshot.runtime} />

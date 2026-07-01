@@ -1,12 +1,14 @@
-import { access, readdir } from "node:fs/promises";
+import { access, mkdir, readFile, readdir } from "node:fs/promises";
 import { createHash } from "node:crypto";
-import { dirname, join, relative, sep } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import type { AdapterRuntime } from "./adapters.ts";
 import { buildManifest } from "./core/walker.ts";
 import { keyFor, type RenderCacheEntry } from "./core/cache.ts";
 import { renderFragmentMatch } from "./core/render.ts";
 import type { LayoutNode, PageNode, RouteManifest } from "./core/types.ts";
 import { compileStyles, copyDirectory, latestMtime, resetDirectory, type ResolvedConfig } from "./tooling.ts";
-import { buildAlpineChunk, buildClientRuntime, DEFAULT_ALPINE_CHUNK_PATH } from "./server.ts";
+import { buildAlpineChunk, buildClientRuntime, DEFAULT_ALPINE_CHUNK_PATH } from "./browser.ts";
+import { createBrandy } from "./server.ts";
 
 /** Eagerly renders every depth (0..N ancestor layouts) for statically-patterned routes (no
  * `[id]` segments) that declared `prerender`/`revalidate`, so the very first production request
@@ -68,10 +70,108 @@ async function publicPaths(directory: string | false): Promise<string[]> {
   await walk(directory); return result;
 }
 
-export async function buildApplication(config: ResolvedConfig): Promise<void> {
+interface CompiledAssets {
+  runtime: string;
+  runtimePath: string;
+  stylesheet?: string;
+  stylesheetPath?: string;
+  alpineChunk?: string;
+  alpineChunkPath?: string;
+}
+
+async function writeStaticAssets(directory: string, config: ResolvedConfig, assets: CompiledAssets, documents: Record<string, string>): Promise<void> {
+  await mkdir(directory, { recursive: true });
+  await copyDirectory(config.publicDir, directory);
+  await Bun.write(join(directory, assets.runtimePath.slice(1)), assets.runtime);
+  if (assets.stylesheet && assets.stylesheetPath) await Bun.write(join(directory, assets.stylesheetPath.slice(1)), assets.stylesheet);
+  if (assets.alpineChunk && assets.alpineChunkPath) await Bun.write(join(directory, assets.alpineChunkPath.slice(1)), assets.alpineChunk);
+  for (const [assetPath, html] of Object.entries(documents)) await Bun.write(join(directory, assetPath.slice(1)), html);
+}
+
+async function bundleSource(source: string, outputFile: string, target: "bun" | "node" | "browser", edgeRuntime = false): Promise<void> {
+  await mkdir(dirname(outputFile), { recursive: true });
+  const entry = join(dirname(outputFile), `.brandy-entry-${crypto.randomUUID()}.ts`);
+  const htmlRuntime = new URL("./html-runtime.ts", import.meta.url).pathname;
+  await Bun.write(entry, source);
+  try {
+    const result = await Bun.build({
+      entrypoints: [entry], outdir: dirname(outputFile), naming: basename(outputFile), target,
+      minify: true, sourcemap: "linked", format: "esm",
+      plugins: edgeRuntime ? [{
+        name: "brandy-edge-runtime",
+        setup(build) {
+          build.onResolve({ filter: /^@elysiajs\/html$/ }, () => ({ path: htmlRuntime }));
+          build.onResolve({ filter: /^node:async_hooks$/ }, (args) => ({ path: args.path, external: true }));
+          build.onResolve({ filter: /^(?:node:)?(?:fs(?:\/promises)?|child_process|cluster|dgram|http2|net|tls|worker_threads)$/ }, (args) => {
+            throw new Error(`${args.path} imported by ${args.importer} is unavailable in edge runtimes`);
+          });
+        },
+      }] : [],
+    });
+    if (!result.success) {
+      const details = result.logs.map((log) => `${log.message}${log.position?.file ? ` (${log.position.file}:${log.position.line})` : ""}`).join("\n");
+      throw new Error(`Brandy ${target} build failed${details ? `:\n${details}` : ""}`);
+    }
+  } catch (error) {
+    if (error instanceof AggregateError) {
+      const details = error.errors.map((item) => item instanceof Error ? item.message : String(item)).join("\n");
+      throw new Error(`Brandy ${target} build failed${details ? `:\n${details}` : ""}`, { cause: error });
+    }
+    throw error;
+  } finally {
+    await Bun.file(entry).delete();
+  }
+}
+
+function adapterRejectsMutableCache(runtime: AdapterRuntime): boolean {
+  return runtime !== "bun";
+}
+
+function outputDirectory(config: ResolvedConfig, configured: string | undefined, fallback: string): string {
+  return configured ? resolve(config.root, configured) : fallback;
+}
+
+async function validateRuntimeSources(files: Iterable<string>, runtime: AdapterRuntime): Promise<void> {
+  if (runtime === "bun") return;
+  for (const file of files) {
+    const source = await readFile(file, "utf8");
+    if (/\bBun\s*(?:\.|\[)/.test(source)) {
+      throw new Error(`${file} uses the Bun global, which is unavailable in the ${runtime} adapter`);
+    }
+  }
+}
+
+async function renderStaticDocuments(
+  manifest: RouteManifest,
+  config: ResolvedConfig,
+  assets: CompiledAssets,
+): Promise<{ documents: Record<string, string>; routes: Record<string, string> }> {
+  const app = await createBrandy({
+    manifest,
+    clientPath: assets.runtimePath,
+    stylesheetPath: assets.stylesheetPath,
+    alpineChunkPath: assets.alpineChunkPath,
+    trustedOrigins: config.trustedOrigins,
+    setup: config.setup,
+    immutablePrerender: true,
+  });
+  const documents: Record<string, string> = {};
+  const routes: Record<string, string> = {};
+  for (const route of manifest.routes) {
+    if (route.page.cache?.revalidateSeconds !== null || route.segments.some((segment) => segment.startsWith("["))) continue;
+    const response = await app.handle(new Request(`http://brandy.local${route.pattern}`));
+    if (response.status !== 200) continue;
+    const assetPath = `/_brandy/pages/${contentHash(route.pattern)}.html`;
+    documents[assetPath] = await response.text();
+    routes[route.pattern] = assetPath;
+  }
+  return { documents, routes };
+}
+
+export async function buildApplication(config: ResolvedConfig): Promise<string> {
   const manifest = await buildManifest(config.appDir);
   const assets = await publicPaths(config.publicDir);
-  const conflicts = assets.filter((path) => path.startsWith("/_brandy/") || manifest.routes.some((route) => !route.pattern.includes(":") && route.pattern === path));
+  const conflicts = assets.filter((path) => path.startsWith("/_brandy/") || manifest.routes.some((route) => !route.segments.some((segment) => segment.startsWith("[")) && route.pattern === path));
   if (conflicts.length) throw new Error(`Public files conflict with Brandy routes: ${conflicts.join(", ")}`);
   const styles = await compileStyles(config.styles, true);
   const alpineChunk = config.alpine ? await buildAlpineChunk() : undefined;
@@ -79,7 +179,20 @@ export async function buildApplication(config: ResolvedConfig): Promise<void> {
   const runtime = await buildClientRuntime(alpineChunkPath ?? DEFAULT_ALPINE_CHUNK_PATH, false);
   const clientPath = `/_brandy/runtime.${contentHash(runtime)}.js`;
   const stylesheetPath = styles ? `/_brandy/app.${contentHash(styles)}.css` : undefined;
-  await resetDirectory(config.outDir);
+  const compiledAssets: CompiledAssets = {
+    runtime, runtimePath: clientPath, stylesheet: styles, stylesheetPath,
+    alpineChunk, alpineChunkPath,
+  };
+  if (adapterRejectsMutableCache(config.adapter.runtime)) {
+    for (const route of manifest.routes) {
+      if (route.page.cache?.revalidateSeconds !== null && route.page.cache) {
+        throw new Error(`${route.page.file} exports \`revalidate\`, which requires a durable cache and is not supported by the ${config.adapter.runtime} adapter`);
+      }
+      if (route.page.cache && route.segments.some((segment) => segment.startsWith("["))) {
+        throw new Error(`${route.page.file} prerenders a dynamic route, which requires static parameter enumeration on the ${config.adapter.runtime} adapter`);
+      }
+    }
+  }
 
   const imports = new Map<string, string>();
   const imported = (file: string | undefined) => {
@@ -105,6 +218,7 @@ export async function buildApplication(config: ResolvedConfig): Promise<void> {
   }
   for (const action of manifest.actions.values()) imported(action.file);
   if (config.configFile) imported(config.configFile);
+  await validateRuntimeSources(imports.keys(), config.adapter.runtime);
 
   const boundary = async (node: LayoutNode | PageNode, files: string[], key: string) => {
     const file = await nearest(node.directory, config.appDir, files); const name = imported(file);
@@ -140,25 +254,100 @@ export async function buildApplication(config: ResolvedConfig): Promise<void> {
     return `registerAction(${JSON.stringify(action.id)},${JSON.stringify(action.path)},${JSON.stringify(action.segmentPath)},${JSON.stringify(action.file)},${JSON.stringify(action.name)},${mod}[${JSON.stringify(action.name)}])`;
   });
   const prerenderSnapshot = await warmPrerenderCache(manifest);
+  const staticOutput = await renderStaticDocuments(manifest, config, compiledAssets);
   const serverImport = new URL("./server.ts", import.meta.url).pathname;
   const rootNotFoundModule = imported(await nearest(config.appDir, config.appDir, NOT_FOUND_FILES));
-  const source = `${[...imports].map(([file, name]) => `import * as ${name} from ${JSON.stringify(file)};`).join("\n")}
+  const commonSource = `${[...imports].map(([file, name]) => `import * as ${name} from ${JSON.stringify(file)};`).join("\n")}
 import { createBrandy } from ${JSON.stringify(serverImport)};
 const actions = new Map();
 function registerAction(id,path,segmentPath,file,name,handler){Object.defineProperty(handler,"toString",{configurable:true,value:()=>path});actions.set(path,{id,path,segmentPath,file,name,handler});}
 ${actions.join(";\n")}
 const manifest={appDir:${JSON.stringify(config.appDir)},routes:[${routes.join(",\n")}],actions,rootNotFound:${rootNotFoundModule ? `${rootNotFoundModule}.default` : "undefined"}};
 const config=${config.configFile ? `${imported(config.configFile)}.default ?? {}` : "{}"};
-const app=await createBrandy({manifest,alpine:${config.alpine},clientPath:${JSON.stringify(clientPath)},runtime:${JSON.stringify(runtime)},alpineChunk:${JSON.stringify(alpineChunk)},alpineChunkPath:${JSON.stringify(alpineChunkPath)},stylesheet:${JSON.stringify(styles)},stylesheetPath:${JSON.stringify(stylesheetPath)},publicDir:${JSON.stringify(join(config.outDir, "public"))},trustedOrigins:config.trustedOrigins,setup:config.setup,dev:false,prerenderSnapshot:${JSON.stringify(prerenderSnapshot)}});
-app.listen({port:Number(process.env.PORT)||${config.port},hostname:process.env.HOST||${JSON.stringify(config.host)}});
-console.log(\`Brandy listening at \${app.server?.url}\`);
 `;
-  const entry = join(config.outDir, "entry.ts");
-  await Bun.write(entry, source);
-  const result = await Bun.build({ entrypoints: [entry], outdir: config.outDir, naming: "server.js", target: "bun", minify: true, sourcemap: "linked" });
-  if (!result.success) throw new AggregateError(result.logs, "Brandy production build failed");
-  await Bun.file(entry).delete();
-  await copyDirectory(config.publicDir, join(config.outDir, "public"));
-  await Bun.write(join(config.outDir, "prerender-cache.json"), JSON.stringify(prerenderSnapshot, null, 2));
-  await Bun.write(join(config.outDir, "build.json"), JSON.stringify({ version: 1, sourceMtime: await latestMtime([config.appDir, config.styles, config.publicDir, config.configFile]), builtAt: Date.now(), assets: { runtime: clientPath, stylesheet: stylesheetPath, alpine: alpineChunkPath } }, null, 2));
+  const appOptions = `manifest,clientPath:${JSON.stringify(clientPath)},stylesheetPath:${JSON.stringify(stylesheetPath)},alpineChunkPath:${JSON.stringify(alpineChunkPath)},trustedOrigins:config.trustedOrigins,setup:config.setup,dev:false,prerenderSnapshot:${JSON.stringify(prerenderSnapshot)},immutablePrerender:${adapterRejectsMutableCache(config.adapter.runtime)}`;
+  const frameworkPaths = [clientPath, stylesheetPath, alpineChunkPath].filter((path): path is string => Boolean(path));
+  const publicAssetPaths = await publicPaths(config.publicDir);
+  const builtAt = Date.now();
+  const sourceMtime = await latestMtime([config.appDir, config.styles, config.publicDir, config.configFile]);
+  const metadata = { version: 2, adapter: config.adapter.runtime, sourceMtime, builtAt, assets: { runtime: clientPath, stylesheet: stylesheetPath, alpine: alpineChunkPath } };
+
+  if (config.adapter.runtime === "bun") {
+    const output = outputDirectory(config, config.adapter.outputDir, config.outDir);
+    const staticDir = join(output, "public");
+    await resetDirectory(output);
+    await writeStaticAssets(staticDir, config, compiledAssets, staticOutput.documents);
+    const source = `${commonSource}
+const app=await createBrandy({${appOptions}});
+const staticRoutes={};
+const staticAssets=new Set(${JSON.stringify([...publicAssetPaths, ...frameworkPaths])});
+const publicRoot=${JSON.stringify(staticDir)};
+const server=Bun.serve({port:Number(process.env.PORT)||${config.port},hostname:process.env.HOST||${JSON.stringify(config.host)},async fetch(request){const url=new URL(request.url);if((request.method==="GET"||request.method==="HEAD")&&request.headers.get("x-brandy-navigation")!=="1"){const path=staticRoutes[url.pathname]??(staticAssets.has(url.pathname)?url.pathname:undefined);if(path){const file=Bun.file(publicRoot+path);if(await file.exists()){const headers=path.startsWith("/_brandy/")?{"cache-control":"public, max-age=31536000, immutable"}:undefined;return new Response(request.method==="HEAD"?null:file,{headers});}}}return app.handle(request);}});
+console.log(\`Brandy listening at \${server.url}\`);
+`;
+    await bundleSource(source, join(output, "server.js"), "bun");
+    await Bun.write(join(output, "prerender-cache.json"), JSON.stringify(prerenderSnapshot, null, 2));
+    await Bun.write(join(output, "build.json"), JSON.stringify(metadata, null, 2));
+    return output;
+  }
+
+  if (config.adapter.runtime === "cloudflare") {
+    const output = outputDirectory(config, config.adapter.outputDir, join(config.outDir, "cloudflare"));
+    const staticDir = join(output, "assets");
+    await resetDirectory(output);
+    await writeStaticAssets(staticDir, config, compiledAssets, staticOutput.documents);
+    const source = `${commonSource}
+const app=await createBrandy({${appOptions}});
+const staticRoutes=${JSON.stringify(staticOutput.routes)};
+const staticAssets=new Set(${JSON.stringify([...publicAssetPaths, ...frameworkPaths])});
+export default {async fetch(request,env){const url=new URL(request.url);if((request.method==="GET"||request.method==="HEAD")&&request.headers.get("x-brandy-navigation")!=="1"){const path=staticRoutes[url.pathname]??(staticAssets.has(url.pathname)?url.pathname:undefined);if(path){const assetRequest=new Request(new URL(path,request.url),request);const response=await env.ASSETS.fetch(assetRequest);if(path.startsWith("/_brandy/")){const headers=new Headers(response.headers);headers.set("cache-control","public, max-age=31536000, immutable");return new Response(response.body,{status:response.status,headers});}return response;}}return app.fetch(request);}};
+`;
+    try {
+      await bundleSource(source, join(output, "worker.js"), "browser", true);
+    } catch (error) {
+      throw new Error(`Cloudflare build failed. Loaders and setup code must not import Bun, filesystem, subprocess, or unsupported Node APIs.\n${String(error)}`, { cause: error });
+    }
+    await Bun.write(join(output, "wrangler.jsonc"), JSON.stringify({
+      $schema: "./node_modules/wrangler/config-schema.json",
+      name: config.adapter.projectName ?? basename(config.root), main: "./worker.js",
+      compatibility_date: config.adapter.compatibilityDate,
+      compatibility_flags: ["nodejs_compat"],
+      assets: { directory: "./assets", binding: "ASSETS", run_worker_first: true },
+    }, null, 2));
+    await Bun.write(join(output, "build.json"), JSON.stringify(metadata, null, 2));
+    return output;
+  }
+
+  const output = outputDirectory(config, config.adapter.outputDir, join(config.root, ".vercel/output"));
+  const staticDir = join(output, "static");
+  const functionDir = join(output, "functions/index.func");
+  const functionEntry = config.adapter.runtime === "vercel-node" ? "index.mjs" : "index.js";
+  await resetDirectory(output);
+  await writeStaticAssets(staticDir, config, compiledAssets, staticOutput.documents);
+  const source = `${commonSource}
+const app=await createBrandy({${appOptions}});
+export default {fetch(request){return app.fetch(request);}};
+`;
+  try {
+    await bundleSource(source, join(functionDir, functionEntry), config.adapter.runtime === "vercel-node" ? "node" : "browser", config.adapter.runtime === "vercel-edge");
+  } catch (error) {
+    throw new Error(`Vercel ${config.adapter.runtime === "vercel-edge" ? "Edge" : "Node"} build failed because application code uses APIs unavailable in that runtime.\n${String(error)}`, { cause: error });
+  }
+  const functionConfig = config.adapter.runtime === "vercel-edge"
+    ? { runtime: "edge", entrypoint: "index.js" }
+    : { runtime: "nodejs22.x", handler: "index.mjs", launcherType: "Nodejs", shouldAddHelpers: true };
+  await Bun.write(join(functionDir, ".vc-config.json"), JSON.stringify(functionConfig, null, 2));
+  const routesConfig: Array<Record<string, unknown>> = [
+    { src: "/.*", has: [{ type: "header", key: "x-brandy-navigation", value: "1" }], dest: "/index" },
+    { src: "/_brandy/.*", headers: { "cache-control": "public, max-age=31536000, immutable" }, continue: true },
+    ...Object.entries(staticOutput.routes).map(([path, destination]) => ({
+      src: `^${path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, dest: destination,
+      headers: { "cache-control": "public, max-age=31536000, immutable" },
+    })),
+    { handle: "filesystem" },
+    { src: "/.*", dest: "/index" },
+  ];
+  await Bun.write(join(output, "config.json"), JSON.stringify({ version: 3, routes: routesConfig, framework: { version: "0.0.1" } }, null, 2));
+  await Bun.write(join(output, "build.json"), JSON.stringify(metadata, null, 2));
+  return output;
 }

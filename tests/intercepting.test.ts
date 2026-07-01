@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { buildManifest, createBrandy } from "brandy";
+import { buildManifest, createDevelopmentApp as createBrandy } from "brandy/build";
 
 const appDir = new URL("../example/app", import.meta.url).pathname;
 

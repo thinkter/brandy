@@ -1,6 +1,6 @@
 # Brandy
 
-Brandy is an experimental Bun/Elysia framework with Next.js-style file-system routing and persistent nested layouts, but no React or RSC. It renders HTML on the server and sends only the route-tree fragment that diverged during soft navigation.
+Brandy is an experimental HTML-over-the-wire framework with Next.js-style file-system routing and persistent nested layouts, but no React or RSC. Bun powers development and compilation; production output can target Bun, Cloudflare Workers, or Vercel Functions. Brandy renders HTML on the server and sends only the route-tree fragment that diverged during soft navigation.
 
 ## Run the example
 
@@ -27,12 +27,12 @@ Brandy owns the server bootstrap. Applications do not need a `server.ts`:
 ```
 
 - `brandy dev` watches routes, configuration, public files, and styles. Page and nested-layout changes refresh the affected boundary while shared layout state remains mounted.
-- `brandy build` writes a deployable server, static route manifest, client runtime, CSS, and public files to `.brandy/`.
-- `brandy start` runs that production artifact and reports a missing or stale build instead of falling back to source files.
+- `brandy build` compiles the route manifest and emits the selected adapter's handler and static assets.
+- `brandy start` runs Bun standalone output. Cloudflare and Vercel output is deployed with their platform CLIs.
 
 The defaults are `app/`, `public/`, an optional root `styles.css`, `.brandy/`, and port `3000`. CLI `--host` and `--port` values override `HOST`/`PORT`, which override config and defaults.
 
-An optional `brandy.config.ts` changes conventions or extends the underlying Elysia app without becoming a bootstrap file:
+An optional `brandy.config.ts` changes conventions, selects a deployment adapter, or adds portable request routes without becoming a bootstrap file:
 
 ```ts
 import { defineConfig } from "brandy/config"
@@ -46,6 +46,31 @@ export default defineConfig({
   },
 })
 ```
+
+## Deployment adapters
+
+Bun remains the build tool for every target. Build-time route walking, Tailwind, subprocesses,
+and file copying are not included in the generated request handler.
+
+```ts
+import { cloudflare, vercel } from "brandy/adapters"
+import { defineConfig } from "brandy/config"
+
+export default defineConfig({
+  adapter: cloudflare(),
+  // adapter: vercel({ runtime: "node" }),
+  // adapter: vercel({ runtime: "edge" }),
+})
+```
+
+- Bun is the default and emits `.brandy/server.js`; run it with `brandy start`.
+- Cloudflare emits `.brandy/cloudflare/worker.js`, static assets, and `wrangler.jsonc`. Deploy with `wrangler deploy --config .brandy/cloudflare/wrangler.jsonc`.
+- Vercel emits Build Output API v3 under `.vercel/output`. Deploy with `vercel deploy --prebuilt`.
+- Cloudflare and Vercel Edge builds reject Bun globals and filesystem, subprocess, socket, and other unsupported Node imports with the originating module path.
+- Serverless adapters support immutable `prerender = true` routes. They reject `revalidate`, dynamic prerendering without parameter enumeration, and action-driven mutation of immutable pages until Brandy has a durable cache API.
+
+The example's `/server` route intentionally demonstrates Bun and Node filesystem/process APIs,
+so that route is not edge-compatible. Edge applications should keep loader dependencies Web API compatible.
 
 Server actions reject POSTs whose `Origin` (or, when absent, `Referer`) does not match the request origin. They also reject requests without either header. `trustedOrigins` is empty by default; add only exact HTTP(S) origins that should be allowed to submit actions.
 
@@ -104,6 +129,20 @@ export default function Page({ data }: RenderContext<Data>) {
 ```
 
 Metadata is inserted on cold loads and reconciled out-of-band after partial navigation.
+
+Shared data functions can opt into request-scoped memoization. Calls with the same arguments
+share pending and completed work across parallel layout and page loaders during one render,
+but are never reused by another request. Object arguments compare by reference.
+
+```tsx
+import { memoizeLoader } from "brandy"
+
+export const getUser = memoizeLoader(async (id: string) => db.users.find(id))
+
+export function load({ params }: { params: Record<string, string> }) {
+  return getUser(params.id)
+}
+```
 
 ## Actions
 

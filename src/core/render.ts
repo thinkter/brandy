@@ -1,5 +1,6 @@
 import { NotFoundError } from "./control.ts";
 import { findClosingTag, insertBeforeClosingTag } from "./html.ts";
+import { createLoaderMemoizationScope, type LoaderMemoizationScope } from "./memo.ts";
 import { escapeAttribute, slotId, streamId } from "./path.ts";
 import type {
   LayoutNode, LoadedRoute, Metadata, MetadataExport, PageNode, RenderContext,
@@ -153,6 +154,7 @@ function renderPipelineStreaming(
   mode: RenderMode,
   options: RenderOptions,
   sharedStatic: Metadata[],
+  withMemoization: LoaderMemoizationScope,
 ): RenderedRoute {
   const nodes: RenderNode[] = [...layouts, match.route.page];
   const streamNode = nodes[streamIndex]!;
@@ -160,13 +162,12 @@ function renderPipelineStreaming(
   const deeperLayouts = layouts.slice(Math.min(streamIndex, layouts.length));
   const anchorId = streamId(streamNode.id);
   const encoder = new TextEncoder();
-
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       let ancestorMetadata: Metadata = {};
       let documentClosing = "";
       try {
-        const loadedAncestors = await loadNodes(match, request, ancestorLayouts);
+        const loadedAncestors = await withMemoization(() => loadNodes(match, request, ancestorLayouts));
         ancestorMetadata = loadedAncestors.metadata;
         const skeletonInner = `<div id="${escapeAttribute(anchorId)}" data-brandy-stream>${String(streamNode.renderLoading!())}</div>`;
         let skeleton = await wrap(skeletonInner, ancestorLayouts, loadedAncestors, request);
@@ -186,7 +187,7 @@ function renderPipelineStreaming(
       let html: string;
       let metadata = mergeMetadata([...sharedStatic, ancestorMetadata]);
       try {
-        const deeper = await renderPipelineCore(match, request, deeperLayouts, options);
+        const deeper = await withMemoization(() => renderPipelineCore(match, request, deeperLayouts, options));
         html = deeper.html;
         metadata = mergeMetadata([...sharedStatic, ancestorMetadata, deeper.metadata]);
       } catch {
@@ -210,14 +211,15 @@ async function renderPipeline(
   mode: RenderMode,
   options: RenderOptions = {},
   sharedStatic: Metadata[] = [],
+  withMemoization: LoaderMemoizationScope = createLoaderMemoizationScope(),
 ): Promise<RenderedRoute> {
   const nodes: RenderNode[] = [...layouts, match.route.page];
   // The root layout (always index 0 for a full document) can never be the streaming boundary —
   // streaming it would mean no <html> shell is available to flush as the first chunk.
   const minIndex = mode === "document" ? 1 : 0;
   const streamIndex = findStreamingIndex(nodes, minIndex);
-  if (streamIndex >= 0) return renderPipelineStreaming(match, request, layouts, streamIndex, mode, options, sharedStatic);
-  const core = await renderPipelineCore(match, request, layouts, options);
+  if (streamIndex >= 0) return renderPipelineStreaming(match, request, layouts, streamIndex, mode, options, sharedStatic, withMemoization);
+  const core = await withMemoization(() => renderPipelineCore(match, request, layouts, options));
   return { kind: "sync", html: core.html, status: core.status, metadata: mergeMetadata([...sharedStatic, core.metadata]) };
 }
 

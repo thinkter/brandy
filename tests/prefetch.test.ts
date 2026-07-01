@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
-import { buildManifest, createBrandy, diffRoutes } from "brandy";
+import { diffRoutes } from "brandy";
+import { buildManifest, createDevelopmentApp as createBrandy } from "brandy/build";
 
 const appDir = new URL("../example/app", import.meta.url).pathname;
 

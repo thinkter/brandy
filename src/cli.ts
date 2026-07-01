@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { buildApplication } from "./build.ts";
 import { runDev } from "./dev.ts";
 import { latestMtime, loadConfig } from "./tooling.ts";
@@ -29,11 +29,13 @@ if (!Number.isInteger(config.port) || config.port < 1 || config.port > 65535) th
 
 if (command === "dev") await runDev(config);
 if (command === "build") {
-  await buildApplication(config);
-  console.log(`Brandy built ${config.outDir}`);
+  const output = await buildApplication(config);
+  console.log(`Brandy built ${output}`);
 }
 if (command === "start") {
-  const server = join(config.outDir, "server.js"); const metadata = Bun.file(join(config.outDir, "build.json"));
+  if (config.adapter.runtime !== "bun") throw new Error(`brandy start only runs the Bun adapter. Deploy the ${config.adapter.runtime} build with its platform CLI.`);
+  const output = config.adapter.outputDir ? resolve(config.root, config.adapter.outputDir) : config.outDir;
+  const server = join(output, "server.js"); const metadata = Bun.file(join(output, "build.json"));
   if (!await Bun.file(server).exists() || !await metadata.exists()) throw new Error("No Brandy build found. Run `brandy build` first.");
   const build = await metadata.json() as { sourceMtime: number };
   const current = await latestMtime([config.appDir, config.styles, config.publicDir, config.configFile]);

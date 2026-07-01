@@ -2,7 +2,8 @@ import { expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildManifest, createBrandy } from "brandy";
+import { createBrandy as createRuntime, revalidate, type ServerAction } from "brandy";
+import { buildManifest, createDevelopmentApp as createBrandy } from "brandy/build";
 
 const appDir = new URL("../example/app", import.meta.url).pathname;
 
@@ -16,6 +17,32 @@ test("cold navigation renders the complete nested document", async () => {
   expect(html).toContain('id="brandy-slot-dashboard"');
   expect(html).toContain("Settings");
   expect(html.match(/src="\/_brandy\/runtime\.js"/g)).toHaveLength(1);
+});
+
+test("portable setup routes run before Brandy's page fallback", async () => {
+  const manifest = await buildManifest(appDir);
+  const app = await createRuntime({ manifest, setup(router) {
+    router.get("/api/health", () => ({ ok: true }));
+  } });
+  const response = await app.handle(new Request("http://localhost/api/health"));
+  expect(response.headers.get("content-type")).toContain("application/json");
+  expect(await response.json()).toEqual({ ok: true });
+});
+
+test("immutable deployments reject action-driven prerender mutation", async () => {
+  const manifest = await buildManifest(appDir);
+  manifest.routes.find((route) => route.pattern === "/")!.page.cache = { revalidateSeconds: null };
+  const path = "/_brandy/actions/test/revalidate";
+  const handler = (async () => revalidate("/")) as unknown as ServerAction;
+  manifest.actions.set(path, { id: "test", path, segmentPath: "", file: "test", name: "test", handler });
+  const app = await createRuntime({ manifest, immutablePrerender: true });
+  const response = await app.handle(new Request(`http://localhost${path}`, {
+    method: "POST",
+    headers: { origin: "http://localhost", "content-type": "application/x-www-form-urlencoded" },
+    body: "value=1",
+  }));
+  expect(response.status).toBe(409);
+  expect(await response.text()).toContain("Cannot revalidate an immutable prerendered route");
 });
 
 test("framework assets are injected without an application server bootstrap", async () => {
@@ -237,7 +264,7 @@ test("development error boundaries can render loader details", async () => {
 
 test("unknown URLs render the explicit 404 route", async () => {
   const manifest = await buildManifest(appDir);
-  const app = await createBrandy({ manifest });
+  const app = await createRuntime({ manifest });
   const cachedRoute = manifest.notFoundRoute;
   const response = await app.handle(new Request("http://localhost/does-not-exist"));
   expect(response.status).toBe(404);

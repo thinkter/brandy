@@ -1,4 +1,5 @@
-import type { Elysia } from "elysia";
+import { bun, type DeploymentAdapter } from "./adapters.ts";
+import type { BrandyApplication } from "./server.ts";
 
 export interface BrandyConfig {
   appDir?: string;
@@ -9,9 +10,12 @@ export interface BrandyConfig {
   port?: number;
   host?: string;
   trustedOrigins?: string[];
-  setup?: (app: Elysia) => void | Promise<void>;
+  adapter?: DeploymentAdapter;
+  setup?: (app: BrandyApplication) => void | Promise<void>;
 }
 
 export function defineConfig(config: BrandyConfig): BrandyConfig {
   return config;
 }
+
+export const defaultAdapter = bun();
