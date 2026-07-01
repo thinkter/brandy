@@ -62,6 +62,11 @@ export async function buildApplication(config: ResolvedConfig): Promise<void> {
     imported(route.page.file); imported(await nearest(route.page.directory, config.appDir, ERROR_FILES));
     imported(await nearest(route.page.directory, config.appDir, NOT_FOUND_FILES));
     imported(await ownFile(route.page.directory, LOADING_FILES));
+    for (const intercepted of route.interceptedBy ?? []) {
+      imported(intercepted.page.file); imported(await nearest(intercepted.page.directory, config.appDir, ERROR_FILES));
+      imported(await nearest(intercepted.page.directory, config.appDir, NOT_FOUND_FILES));
+      imported(await ownFile(intercepted.page.directory, LOADING_FILES));
+    }
   }
   for (const action of manifest.actions.values()) imported(action.file);
   if (config.configFile) imported(config.configFile);
@@ -79,11 +84,19 @@ export async function buildApplication(config: ResolvedConfig): Promise<void> {
     const mod = imported(node.file)!;
     layouts.set(node.file, `{ id:${JSON.stringify(node.id)}, directory:${JSON.stringify(node.directory)}, file:${JSON.stringify(node.file)}, render:${mod}.default, load:${mod}.load, metadata:${mod}.metadata${await boundary(node, ERROR_FILES, "renderError")}${await boundary(node, NOT_FOUND_FILES, "renderNotFound")}${await ownBoundary(node, LOADING_FILES, "renderLoading")} }`);
   }
+  const pageObjectCode = async (page: PageNode) => {
+    const mod = imported(page.file)!;
+    return `{ id:${JSON.stringify(page.id)}, directory:${JSON.stringify(page.directory)}, file:${JSON.stringify(page.file)}, render:${mod}.default, load:${mod}.load, metadata:${mod}.metadata${await boundary(page, ERROR_FILES, "renderError")}${await boundary(page, NOT_FOUND_FILES, "renderNotFound")}${await ownBoundary(page, LOADING_FILES, "renderLoading")} }`;
+  };
   const routes: string[] = [];
   for (const route of manifest.routes) {
     const page = route.page; const mod = imported(page.file)!;
-    const pageCode = `{ id:${JSON.stringify(page.id)}, directory:${JSON.stringify(page.directory)}, file:${JSON.stringify(page.file)}, render:${mod}.default, load:${mod}.load, metadata:${mod}.metadata${await boundary(page, ERROR_FILES, "renderError")}${await boundary(page, NOT_FOUND_FILES, "renderNotFound")}${await ownBoundary(page, LOADING_FILES, "renderLoading")} }`;
-    routes.push(`{ id:${JSON.stringify(route.id)}, pattern:${JSON.stringify(route.pattern)}, segments:${JSON.stringify(route.segments)}, layouts:[${route.layouts.map((item) => layouts.get(item.file)).join(",")}], page:${pageCode}, pageFile:${JSON.stringify(page.file)}, renderPage:${mod}.default }`);
+    const pageCode = await pageObjectCode(page);
+    const interceptedByCode = await Promise.all((route.interceptedBy ?? []).map(async (intercepted) =>
+      `{ fromSegments:${JSON.stringify(intercepted.fromSegments)}, page:${await pageObjectCode(intercepted.page)} }`
+    ));
+    const interceptedByField = interceptedByCode.length ? `, interceptedBy:[${interceptedByCode.join(",")}]` : "";
+    routes.push(`{ id:${JSON.stringify(route.id)}, pattern:${JSON.stringify(route.pattern)}, segments:${JSON.stringify(route.segments)}, layouts:[${route.layouts.map((item) => layouts.get(item.file)).join(",")}], page:${pageCode}, pageFile:${JSON.stringify(page.file)}, renderPage:${mod}.default${interceptedByField} }`);
   }
   const actions = [...manifest.actions.values()].map((action) => {
     const mod = imported(action.file)!;

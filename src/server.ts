@@ -4,8 +4,8 @@ import { isAbsolute, relative, resolve, sep } from "node:path";
 import { isRevalidation } from "./core/control.ts";
 import { matchRoute } from "./core/diff.ts";
 import { escapeAttribute, normalizePathname, slotId } from "./core/path.ts";
-import { injectMetadata, metadataSwap, renderFragmentMatch, renderFullMatch } from "./core/render.ts";
-import type { PageNode, Route, RouteManifest, RouteMatch } from "./core/types.ts";
+import { injectMetadata, metadataSwap, renderFragmentMatch, renderFullMatch, streamSwap } from "./core/render.ts";
+import type { PageNode, Route, RouteDiff, RouteManifest, RouteMatch } from "./core/types.ts";
 import { buildManifest } from "./core/walker.ts";
 import type { BrandyConfig } from "./config.ts";
 
@@ -17,6 +17,10 @@ export const TARGET_URL_HEADER = "x-brandy-url";
 export const REFRESH_BOUNDARY_HEADER = "x-brandy-refresh-boundary";
 export const PREFETCH_HEADER = "x-brandy-prefetch";
 export const STREAM_HEADER = "x-brandy-stream";
+export const NO_INTERCEPT_HEADER = "x-brandy-no-intercept";
+/** Reserved element id for intercepting-route modals. Brandy injects this div into the document
+ * automatically — apps never declare it, matching "the developer never hand-writes a target". */
+export const MODAL_OUTLET_ID = "brandy-modal-outlet";
 
 export interface BrandyOptions {
   appDir?: string;
@@ -80,6 +84,10 @@ function resolveMatch(manifest: RouteManifest, pathname: string): { match: Route
   }
 }
 
+function sameSegments(a: string[], b: string[]): boolean {
+  return a.length === b.length && a.every((segment, index) => segment === b[index]);
+}
+
 function diffMatches(current: RouteMatch, target: RouteMatch) {
   let shared = 0;
   while (shared < current.route.layouts.length && shared < target.route.layouts.length && current.route.layouts[shared]!.id === target.route.layouts[shared]!.id) shared++;
@@ -125,6 +133,22 @@ function injectDevRuntime(document: string): string {
   return document.includes("</body>") ? document.replace("</body>", `${script}</body>`) : `${document}${script}`;
 }
 
+function injectModalOutlet(document: string): string {
+  if (document.includes(`id="${MODAL_OUTLET_ID}"`)) return document;
+  const div = `<div id="${MODAL_OUTLET_ID}" data-brandy-slot></div>`;
+  return document.includes("</body>") ? document.replace("</body>", `${div}</body>`) : `${document}${div}`;
+}
+
+/** Appends one more chunk after a stream finishes — used to attach the modal-outlet-clear
+ * OOB instruction to an ordinary streaming navigation without buffering the whole body. */
+function appendToStream(stream: ReadableStream<Uint8Array>, trailer: string): ReadableStream<Uint8Array> {
+  if (!trailer) return stream;
+  const encoder = new TextEncoder();
+  return stream.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
+    flush(controller) { controller.enqueue(encoder.encode(trailer)); },
+  }));
+}
+
 /** Applies a string transform to only the first chunk of a stream — used to inject static
  * (loader-independent) assets into a streaming document's skeleton without buffering the whole body. */
 function injectIntoFirstChunk(stream: ReadableStream<Uint8Array>, transform: (html: string) => string): ReadableStream<Uint8Array> {
@@ -151,6 +175,8 @@ export async function createBrandy(options: BrandyOptions): Promise<Elysia> {
   const trustedOrigins = normalizeTrustedOrigins(options.trustedOrigins ?? []);
   const publicDir = options.publicDir ? resolve(options.publicDir) : undefined;
   const renderOptions = { dev: options.dev === true };
+  const hasInterceptedRoutes = manifest.routes.some((route) => (route.interceptedBy?.length ?? 0) > 0);
+  const modalClear = hasInterceptedRoutes ? streamSwap(MODAL_OUTLET_ID, "") : "";
   const app = new Elysia();
 
   if (options.setup) await options.setup(app);
@@ -190,10 +216,10 @@ export async function createBrandy(options: BrandyOptions): Promise<Elysia> {
       if (rendered.kind === "stream") {
         set.status = 200;
         set.headers[STREAM_HEADER] = "1";
-        return rendered.stream;
+        return appendToStream(rendered.stream, modalClear);
       }
       set.status = rendered.status;
-      return `${rendered.html}${metadataSwap(rendered.metadata)}`;
+      return `${rendered.html}${metadataSwap(rendered.metadata)}${modalClear}`;
     }
     return Response.redirect(new URL(targetPath, request.url), 303);
   });
@@ -216,6 +242,33 @@ export async function createBrandy(options: BrandyOptions): Promise<Elysia> {
       const currentPath = request.headers.get(CURRENT_URL_HEADER);
       if (!currentPath) { set.status = 400; return "Missing x-brandy-current-url header"; }
       const current = resolveMatch(manifest, normalizePathname(currentPath)).match;
+
+      const noIntercept = request.headers.get(NO_INTERCEPT_HEADER) === "1";
+      const interception = hasInterceptedRoutes && !noIntercept && !targetResult.missing && current.pathname !== targetPath
+        ? targetResult.match.route.interceptedBy?.find((entry) => sameSegments(entry.fromSegments, current.route.segments))
+        : undefined;
+
+      if (interception) {
+        const syntheticRoute: Route = {
+          id: targetResult.match.route.id, pattern: targetResult.match.route.pattern, segments: targetResult.match.route.segments,
+          layouts: [], page: interception.page, pageFile: interception.page.file, renderPage: interception.page.render,
+        };
+        const syntheticTarget: RouteMatch = { route: syntheticRoute, pathname: targetResult.match.pathname, params: targetResult.match.params };
+        const diff: RouteDiff = { current, target: syntheticTarget, boundary: current.route.layouts[0]!, chainToRender: [] };
+        const rendered = await renderFragmentMatch(diff, request, { ...renderOptions, metadataMode: "merge" });
+        set.headers[RETARGET_HEADER] = `#${MODAL_OUTLET_ID}`;
+        set.headers[RESWAP_HEADER] = "innerHTML";
+        set.headers[TARGET_URL_HEADER] = targetPath;
+        set.headers["vary"] = `${PARTIAL_HEADER}, ${CURRENT_URL_HEADER}`;
+        if (rendered.kind === "stream") {
+          set.status = 200;
+          set.headers[STREAM_HEADER] = "1";
+          return rendered.stream;
+        }
+        set.status = rendered.status;
+        return `${rendered.html}${metadataSwap(rendered.metadata, "merge")}`;
+      }
+
       const refresh = request.headers.get(REFRESH_BOUNDARY_HEADER);
       let diff = diffMatches(current, targetResult.match);
       if (refresh) {
@@ -233,10 +286,10 @@ export async function createBrandy(options: BrandyOptions): Promise<Elysia> {
       if (rendered.kind === "stream") {
         set.status = targetResult.missing ? 404 : 200;
         set.headers[STREAM_HEADER] = "1";
-        return rendered.stream;
+        return appendToStream(rendered.stream, modalClear);
       }
       set.status = targetResult.missing ? 404 : rendered.status;
-      return `${rendered.html}${metadataSwap(rendered.metadata)}`;
+      return `${rendered.html}${metadataSwap(rendered.metadata)}${modalClear}`;
     }
     const rendered = await renderFullMatch(targetResult.match, request, renderOptions);
     if (rendered.kind === "stream") {
@@ -246,6 +299,7 @@ export async function createBrandy(options: BrandyOptions): Promise<Elysia> {
         let document = injectClientRuntime(html, clientPath);
         if (options.stylesheet) document = injectStylesheet(document, "/_brandy/app.css");
         if (options.dev) document = injectDevRuntime(document);
+        if (hasInterceptedRoutes) document = injectModalOutlet(document);
         return document;
       });
     }
@@ -253,6 +307,7 @@ export async function createBrandy(options: BrandyOptions): Promise<Elysia> {
     let document = injectClientRuntime(injectMetadata(rendered.html, rendered.metadata), clientPath);
     if (options.stylesheet) document = injectStylesheet(document, "/_brandy/app.css");
     if (options.dev) document = injectDevRuntime(document);
+    if (hasInterceptedRoutes) document = injectModalOutlet(document);
     return document;
   });
   return app;

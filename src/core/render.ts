@@ -112,7 +112,11 @@ function findStreamingIndex(nodes: RenderNode[], minIndex: number): number {
   return -1;
 }
 
-function streamSwap(anchorId: string, html: string): string {
+/** A general-purpose named-anchor out-of-band swap: `<template data-brandy-stream-target="id">`,
+ * applied client-side by replacing the children of `document.getElementById(id)`. Used for
+ * streaming's deferred content, and reused as-is by intercepting routes to clear the modal
+ * outlet on ordinary navigations — both are the same "swap this named anchor" primitive. */
+export function streamSwap(anchorId: string, html: string): string {
   return `<template data-brandy-stream-target="${escapeAttribute(anchorId)}">${html}</template>`;
 }
 
@@ -194,7 +198,7 @@ function renderPipelineStreaming(
       }
       const tail = mode === "document"
         ? inlineSwap(anchorId, html) + inlineMetaSwap(metadata) + documentClosing
-        : streamSwap(anchorId, html) + metadataSwap(metadata);
+        : streamSwap(anchorId, html) + metadataSwap(metadata, options.metadataMode);
       controller.enqueue(encoder.encode(tail));
       controller.close();
     },
@@ -236,8 +240,9 @@ export function injectMetadata(document: string, metadata: Metadata): string {
   return document.includes("</head>") ? document.replace("</head>", `${tags}</head>`) : `${tags}${document}`;
 }
 
-export function metadataSwap(metadata: Metadata): string {
-  return `<template data-brandy-head>${metaTags(metadata)}</template>`;
+export function metadataSwap(metadata: Metadata, mode: "replace" | "merge" = "replace"): string {
+  const attribute = mode === "merge" ? ' data-brandy-head="merge"' : " data-brandy-head";
+  return `<template${attribute}>${metaTags(metadata)}</template>`;
 }
 
 export async function renderFullMatch(match: RouteMatch, request: Request, options: RenderOptions = {}): Promise<RenderedRoute> {

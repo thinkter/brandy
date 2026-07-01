@@ -1,7 +1,7 @@
 import { readdir } from "node:fs/promises";
 import { join, relative, resolve, sep } from "node:path";
 import type {
-  ActionDefinition, ErrorRenderer, LayoutModule, LayoutNode, LoadingRenderer, NotFoundRenderer,
+  ActionDefinition, ErrorRenderer, InterceptedRoute, LayoutModule, LayoutNode, LoadingRenderer, NotFoundRenderer,
   PageModule, PageNode, Route, RouteManifest, ServerAction,
 } from "./types.ts";
 import { routePattern } from "./path.ts";
@@ -12,6 +12,33 @@ const ERROR_FILES = ["error.tsx", "error.ts", "error.jsx", "error.js"];
 const NOT_FOUND_FILES = ["not-found.tsx", "not-found.ts", "not-found.jsx", "not-found.js"];
 const LOADING_FILES = ["loading.tsx", "loading.ts", "loading.jsx", "loading.js"];
 const ACTION_FILES = ["actions.tsx", "actions.ts", "actions.jsx", "actions.js"];
+
+interface InterceptMarker {
+  levels: number | "root";
+  targetName: string;
+}
+
+/** Parses a (.)/(..)/(..)(..)/(...) intercepting-route directory name. The dot-count is
+ * relative to the directory the marker itself lives in, matching Next's semantics. */
+function parseInterceptMarker(name: string): InterceptMarker | undefined {
+  const match = /^(\(\.\)|\(\.\.\.\)|(?:\(\.\.\))+)(.+)$/.exec(name);
+  if (!match) return undefined;
+  const marker = match[1]!;
+  const targetName = match[2]!;
+  if (marker === "(.)") return { levels: 0, targetName };
+  if (marker === "(...)") return { levels: "root", targetName };
+  return { levels: marker.length / 4, targetName };
+}
+
+interface InterceptCandidate {
+  targetPattern: string;
+  fromSegments: string[];
+  page: PageNode;
+}
+
+function sameSegments(a: string[], b: string[]): boolean {
+  return a.length === b.length && a.every((segment, index) => segment === b[index]);
+}
 
 function firstExisting(directory: string, entries: ReadonlySet<string>, candidates: string[]): string | undefined {
   const name = candidates.find((candidate) => entries.has(candidate));
@@ -72,6 +99,8 @@ async function walkDirectory(
   inheritedNotFound: NotFoundRenderer | undefined,
   routes: Route[],
   actions: Map<string, ActionDefinition>,
+  interceptFrom: string[] | undefined,
+  intercepted: InterceptCandidate[],
 ): Promise<void> {
   const entries = await readdir(directory, { withFileTypes: true });
   const names = new Set(entries.map((entry) => entry.name));
@@ -104,15 +133,38 @@ async function walkDirectory(
       id: `${segmentPath || "root"}/page`, directory, file: pageFile, render: module.default,
       load: module.load, metadata: module.metadata, renderError, renderNotFound, renderLoading: ownLoading,
     };
-    routes.push({ id: pattern, pattern, segments, layouts, page, pageFile, renderPage: module.default });
+    if (interceptFrom) {
+      intercepted.push({ targetPattern: pattern, fromSegments: interceptFrom, page });
+    } else {
+      routes.push({ id: pattern, pattern, segments, layouts, page, pageFile, renderPage: module.default });
+    }
   }
 
   const directories = entries
     .filter((entry) => entry.isDirectory() && !entry.name.startsWith("_") && !entry.name.startsWith("."))
     .sort((a, b) => a.name.localeCompare(b.name));
-  await Promise.all(directories.map((entry) => walkDirectory(
-    join(directory, entry.name), [...segments, entry.name], layouts, renderError, renderNotFound, routes, actions,
-  )));
+  await Promise.all(directories.map(async (entry) => {
+    // Intercepting markers are only recognized outside an existing intercepting subtree —
+    // a marker nested inside another marker's directory is not supported.
+    const marker = !interceptFrom ? parseInterceptMarker(entry.name) : undefined;
+    if (marker) {
+      let virtualBase: string[];
+      if (marker.levels === "root") {
+        virtualBase = [];
+      } else {
+        if (marker.levels > segments.length) {
+          throw new Error(`Intercepting route "${entry.name}" in ${directory} goes up ${marker.levels} level(s), but only ${segments.length} are available`);
+        }
+        virtualBase = segments.slice(0, segments.length - marker.levels);
+      }
+      const virtualSegments = [...virtualBase, marker.targetName];
+      await walkDirectory(join(directory, entry.name), virtualSegments, layouts, renderError, renderNotFound, routes, actions, segments, intercepted);
+      return;
+    }
+    await walkDirectory(
+      join(directory, entry.name), [...segments, entry.name], layouts, renderError, renderNotFound, routes, actions, interceptFrom, intercepted,
+    );
+  }));
 }
 
 export async function buildManifest(appDirectory: string, cacheBust?: string): Promise<RouteManifest> {
@@ -120,7 +172,8 @@ export async function buildManifest(appDirectory: string, cacheBust?: string): P
   const appDir = resolve(appDirectory);
   const routes: Route[] = [];
   const actions = new Map<string, ActionDefinition>();
-  await walkDirectory(appDir, [], [], undefined, undefined, routes, actions);
+  const intercepted: InterceptCandidate[] = [];
+  await walkDirectory(appDir, [], [], undefined, undefined, routes, actions, undefined, intercepted);
   routes.sort((a, b) => {
     const dynamicA = a.segments.filter((segment) => segment.startsWith("[")).length;
     const dynamicB = b.segments.filter((segment) => segment.startsWith("[")).length;
@@ -132,6 +185,17 @@ export async function buildManifest(appDirectory: string, cacheBust?: string): P
       const shown = relative(process.cwd(), route.pageFile).split(sep).join("/");
       throw new Error(`Route ${shown} has no ancestor layout; app/layout is required`);
     }
+  }
+  for (const candidate of intercepted) {
+    const target = routes.find((route) => route.pattern === candidate.targetPattern);
+    if (!target) {
+      throw new Error(`Intercepting route for "${candidate.targetPattern}" has no matching standalone route. Add app${candidate.targetPattern === "/" ? "" : candidate.targetPattern}/page.tsx or remove the intercepting directory.`);
+    }
+    const entries: InterceptedRoute[] = target.interceptedBy ?? (target.interceptedBy = []);
+    if (entries.some((entry) => sameSegments(entry.fromSegments, candidate.fromSegments))) {
+      throw new Error(`Multiple intercepting routes for "${candidate.targetPattern}" declare the same source location "/${candidate.fromSegments.join("/")}"`);
+    }
+    entries.push({ fromSegments: candidate.fromSegments, page: candidate.page });
   }
   return { appDir, routes, actions, rootNotFound: routes[0]?.layouts[0]?.renderNotFound };
 }

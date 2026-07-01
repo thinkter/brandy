@@ -8,6 +8,7 @@ const PARTIAL = "x-brandy-navigation";
 const CURRENT = "x-brandy-current-url";
 const PREFETCH = "x-brandy-prefetch";
 const STREAM = "x-brandy-stream";
+const NO_INTERCEPT = "x-brandy-no-intercept";
 const STREAM_BOUNDARY = "<!--brandy:stream-boundary-->";
 const HOVER_DELAY = 100;
 
@@ -42,7 +43,21 @@ function cacheKey(url: URL): string { return url.pathname + url.search; }
 function reconcileHead(root: ParentNode): void {
   const update = root.querySelector<HTMLTemplateElement>("template[data-brandy-head]");
   if (!update) return;
-  document.head.querySelectorAll("[data-brandy-metadata]").forEach((node) => node.remove());
+  if (update.dataset.brandyHead === "merge") {
+    const metadataKey = (element: Element): string => {
+      if (element.tagName === "TITLE") return "title";
+      const identity = ["name", "property", "http-equiv", "charset", "itemprop"]
+        .map((attribute) => element.getAttribute(attribute))
+        .find((value) => value !== null);
+      return `${element.tagName}:${identity ?? element.outerHTML}`;
+    };
+    const incoming = new Set(Array.from(update.content.children, metadataKey));
+    document.head.querySelectorAll("[data-brandy-metadata]").forEach((node) => {
+      if (incoming.has(metadataKey(node))) node.remove();
+    });
+  } else {
+    document.head.querySelectorAll("[data-brandy-metadata]").forEach((node) => node.remove());
+  }
   document.head.append(update.content.cloneNode(true));
   update.remove();
 }
@@ -119,7 +134,9 @@ function applyFragment(result: FragmentResult, url: URL, historyMode: "push" | "
     target.replaceChildren(template.content.cloneNode(true));
     reconcileStream(target, false);
   } else {
-    reconcileHead(template.content);
+    // Ordinary (non-streamed) responses can still carry an OOB template — e.g. the modal-outlet
+    // clear instruction on an intercepting-routes app — so this needs the same generalized scan.
+    reconcileStream(template.content);
     target.replaceChildren(template.content.cloneNode(true));
   }
   const finalURL = result.finalURL ?? `${url.pathname}${url.search}`;
@@ -227,7 +244,9 @@ async function navigate(url: URL, init?: RequestInit, historyMode: "push" | "non
 }
 
 function eligibleForPrefetch(link: HTMLAnchorElement): URL | null {
-  if (link.target || link.download || link.hasAttribute("data-brandy-reload") || link.hasAttribute("data-brandy-no-prefetch")) return null;
+  // A no-intercept link always bypasses the prefetch cache on click (see the click handler),
+  // so prefetching it would be wasted work — skip it entirely rather than cache something unusable.
+  if (link.target || link.download || link.hasAttribute("data-brandy-reload") || link.hasAttribute("data-brandy-no-prefetch") || link.hasAttribute("data-brandy-no-intercept")) return null;
   const url = new URL(link.href, location.href);
   if (!internal(url)) return null;
   if (url.pathname === location.pathname && url.search === location.search) return null;
@@ -286,7 +305,10 @@ document.addEventListener("click", (event) => {
   const url = new URL(link.href, location.href);
   if (!internal(url)) return;
   event.preventDefault();
-  void navigate(url);
+  // Passing init (even just to carry a header) also disables cache-hit reuse for this click,
+  // which is correct: a prefetch issued without this intent could be the wrong (intercepted) variant.
+  const init = link.hasAttribute("data-brandy-no-intercept") ? { headers: { [NO_INTERCEPT]: "1" } } : undefined;
+  void navigate(url, init);
 });
 
 document.addEventListener("submit", (event) => {

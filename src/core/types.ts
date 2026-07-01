@@ -14,6 +14,7 @@ export interface ErrorContext extends RequestContext {
 
 export interface RenderOptions {
   dev?: boolean;
+  metadataMode?: "replace" | "merge";
 }
 
 export interface RenderContext<T = unknown> extends RequestContext {
@@ -90,6 +91,14 @@ export interface Revalidation {
   readonly path: string;
 }
 
+/** An alternate rendering of a standalone route, declared by a (.)/(..)/(...) marker
+ * directory. Rendered naked (no layouts) into the reserved modal outlet when the
+ * current route's segments exactly match fromSegments. */
+export interface InterceptedRoute {
+  fromSegments: string[];
+  page: PageNode;
+}
+
 export interface Route {
   id: string;
   pattern: string;
@@ -100,6 +109,7 @@ export interface Route {
   pageFile: string;
   /** @deprecated Use page.render. */
   renderPage: PageModule["default"];
+  interceptedBy?: InterceptedRoute[];
 }
 
 export interface RouteManifest {
