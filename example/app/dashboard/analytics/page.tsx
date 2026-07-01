@@ -4,7 +4,9 @@ import type { Metadata, RenderContext } from "brandy";
 export const metadata: Metadata = { title: "Analytics · Brandy" };
 
 export async function load() {
-  await new Promise((resolve) => setTimeout(resolve, 4000));
+  const { promise, resolve } = Promise.withResolvers<void>();
+  setTimeout(resolve, 4000);
+  await promise;
   return { visitors: 1284, loadedAt: new Date().toISOString() };
 }
 

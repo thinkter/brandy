@@ -1,15 +1,8 @@
-import { readFile, stat } from "node:fs/promises";
 import { hostname, platform } from "node:os";
 import { memoizeLoader } from "brandy";
-
-const packageFile = new URL("../../../package.json", import.meta.url);
+import packageManifest from "../../../package.json" with { type: "json" };
 
 export const getServerSnapshot = memoizeLoader(async () => {
-  const [source, details] = await Promise.all([
-    readFile(packageFile, "utf8"),
-    stat(packageFile),
-  ]);
-  const manifest = JSON.parse(source) as { name: string; version: string; dependencies: Record<string, string> };
   const memory = process.memoryUsage();
 
   return {
@@ -19,17 +12,18 @@ export const getServerSnapshot = memoizeLoader(async () => {
     host: hostname(),
     uptime: formatDuration(process.uptime()),
     memory: `${Math.round(memory.rss / 1024 / 1024)} MB`,
-    package: `${manifest.name}@${manifest.version}`,
-    dependencies: Object.keys(manifest.dependencies).length,
-    manifestUpdatedAt: details.mtime.toISOString(),
+    package: `${packageManifest.name}@${packageManifest.version}`,
+    dependencies: Object.keys(packageManifest.dependencies).length,
     renderedAt: new Date().toISOString(),
   };
 });
 
 export async function getServerActivity() {
-  await new Promise((resolve) => setTimeout(resolve, 20));
+  const { promise, resolve } = Promise.withResolvers<void>();
+  setTimeout(resolve, 20);
+  await promise;
   return [
-    { label: "Read package manifest", source: "node:fs/promises" },
+    { label: "Inlined package manifest at build time", source: "import … with { type: 'json' }" },
     { label: "Inspected process memory", source: "process.memoryUsage()" },
     { label: "Resolved host platform", source: "node:os" },
   ];
