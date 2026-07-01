@@ -16,12 +16,15 @@ export default function RootLayout({ children }: { children: JSX.Element }) {
       <body>
         <header class="border-b border-zinc-800">
           <div class="mx-auto flex max-w-4xl items-center justify-between px-5 py-4">
-            <a class="font-semibold no-underline" href="/">Brandy</a>
+            <a class="font-semibold no-underline" href="/">
+              Brandy
+            </a>
             <nav class="flex gap-5 text-sm">
               <a href="/">Home</a>
               <a href="/dashboard">Dashboard</a>
               <a href="/server">Server</a>
               <a href="/components">Components</a>
+              <a href="/interactive">Interactive</a>
               <a href="/about">About</a>
             </nav>
           </div>

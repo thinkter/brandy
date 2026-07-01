@@ -75,6 +75,12 @@ export function HomeFeatureLinks() {
         title="Compose reusable server TSX"
         description="Share typed UI primitives and add Alpine only where interaction is needed."
       />
+      <FeatureLink
+        href="/interactive"
+        label="Client only"
+        title="Explore Alpine-powered UI patterns"
+        description="Accordions, tabs, filters, toasts, and more without server data or hydration."
+      />
     </div>
   );
 }
@@ -123,4 +129,3 @@ export function HomeClientState() {
     </section>
   );
 }
-
