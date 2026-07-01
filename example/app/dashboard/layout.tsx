@@ -12,10 +12,10 @@ export default function DashboardLayout({
     <main class="mx-auto max-w-4xl px-5 py-10">
       <nav class="mb-8 flex gap-4 border-b border-zinc-800 pb-4 text-sm">
         <a href="/dashboard" data-brandy-no-prefetch>
-          Overview
+          Overview (No prefetch)
         </a>
         <a href="/dashboard/settings" data-brandy-reload>
-          Settings
+          Settings (Hard Reload)
         </a>
         {/*<a href="/dashboard/settings">Settings</a>*/}
         <a href="/dashboard/users">Users</a>
