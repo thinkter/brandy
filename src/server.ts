@@ -50,6 +50,10 @@ interface RegisteredRoute {
   handler: BrandyRequestHandler;
 }
 
+function canonicalPathname(pathname: string): string {
+  return pathname === "/" ? pathname : pathname.replace(/\/+$/, "") || "/";
+}
+
 function routeMatches(pattern: string, pathname: string): boolean {
   return pattern.endsWith("*") ? pathname.startsWith(pattern.slice(0, -1)) : pathname === pattern;
 }
@@ -66,12 +70,12 @@ export class BrandyApplication {
   private fallback: (request: Request) => Promise<Response> = async () => new Response("Not found", { status: 404 });
 
   get(path: string, handler: BrandyRequestHandler): this {
-    this.routes.push({ method: "GET", path, handler });
+    this.routes.push({ method: "GET", path: canonicalPathname(path), handler });
     return this;
   }
 
   post(path: string, handler: BrandyRequestHandler): this {
-    this.routes.push({ method: "POST", path, handler });
+    this.routes.push({ method: "POST", path: canonicalPathname(path), handler });
     return this;
   }
 
@@ -80,7 +84,12 @@ export class BrandyApplication {
   }
 
   async handle(request: Request): Promise<Response> {
-    const pathname = new URL(request.url).pathname;
+    const url = new URL(request.url);
+    if (url.pathname !== "/" && url.pathname.endsWith("/")) {
+      url.pathname = canonicalPathname(url.pathname);
+      return Response.redirect(url, 308);
+    }
+    const pathname = url.pathname;
     const route = this.routes.find((candidate) => candidate.method === request.method && routeMatches(candidate.path, pathname));
     return route ? responseFrom(route.handler({ request })) : this.fallback(request);
   }

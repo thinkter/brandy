@@ -29,6 +29,40 @@ test("portable setup routes run before Brandy's page fallback", async () => {
   expect(await response.json()).toEqual({ ok: true });
 });
 
+test("trailing slashes redirect to the canonical path before route matching", async () => {
+  const manifest = await buildManifest(appDir);
+  let postCalls = 0;
+  const app = await createRuntime({ manifest, setup(router) {
+    router.post("/api/submit/", () => {
+      postCalls++;
+      return "submitted";
+    });
+  } });
+
+  const page = await app.handle(new Request("http://localhost/about/?tab=team"));
+  expect(page.status).toBe(308);
+  expect(page.headers.get("location")).toBe("http://localhost/about?tab=team");
+
+  const post = await app.handle(new Request("http://localhost/api/submit/?draft=1", {
+    method: "POST",
+    body: "payload",
+  }));
+  expect(post.status).toBe(308);
+  expect(post.headers.get("location")).toBe("http://localhost/api/submit?draft=1");
+  expect(postCalls).toBe(0);
+
+  const canonicalPost = await app.handle(new Request("http://localhost/api/submit?draft=1", {
+    method: "POST",
+    body: "payload",
+  }));
+  expect(canonicalPost.status).toBe(200);
+  expect(await canonicalPost.text()).toBe("submitted");
+  expect(postCalls).toBe(1);
+
+  const root = await app.handle(new Request("http://localhost/?tab=home"));
+  expect(root.status).toBe(200);
+});
+
 test("immutable deployments reject action-driven prerender mutation", async () => {
   const manifest = await buildManifest(appDir);
   manifest.routes.find((route) => route.pattern === "/")!.page.cache = { revalidateSeconds: null };
