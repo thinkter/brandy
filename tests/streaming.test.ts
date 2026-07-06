@@ -2,8 +2,8 @@ import { expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
-  memoizeLoader, renderFragmentMatch, renderFullMatch,
-  type LayoutNode, type PageNode, type Route, type RouteDiff, type RouteMatch,
+  createBrandy as createRuntime, memoizeLoader, renderFragmentMatch, renderFullMatch,
+  type LayoutNode, type PageNode, type Route, type RouteDiff, type RouteManifest, type RouteMatch,
 } from "brandy";
 import { createDevelopmentApp as createBrandy } from "brandy/build";
 
@@ -14,6 +14,44 @@ function gate(): { promise: Promise<void>; release: () => void } {
   const promise = new Promise<void>((resolve) => { release = resolve; });
   return { promise, release };
 }
+
+test("HEAD preserves streaming headers without rendering a body", async () => {
+  let loaderCalls = 0;
+  let loadingCalls = 0;
+  const root: LayoutNode = {
+    id: "root", directory: "/app", file: "/app/layout.tsx",
+    render: ({ children }) => `<html><body>${children}</body></html>` as JSX.Element,
+  };
+  const page: PageNode = {
+    id: "root/page", directory: "/app", file: "/app/page.tsx",
+    load: () => { loaderCalls++; return "real data"; },
+    render: ({ data }) => `<main>${data}</main>` as JSX.Element,
+    renderLoading: () => { loadingCalls++; return `<main>SKELETON</main>` as JSX.Element; },
+  };
+  const route: Route = { id: "/", pattern: "/", segments: [], layouts: [root], page, pageFile: page.file, renderPage: page.render };
+  const manifest: RouteManifest = { appDir: "/app", routes: [route], actions: new Map() };
+  const app = await createRuntime({ manifest });
+
+  const response = await app.handle(new Request("http://localhost/", { method: "HEAD" }));
+
+  expect(response.status).toBe(200);
+  expect(response.headers.get("content-type")).toBe("text/html; charset=utf-8");
+  expect(response.headers.get("x-brandy-stream")).toBe("1");
+  expect(response.body).toBeNull();
+  expect(await response.text()).toBe("");
+  expect(loaderCalls).toBe(0);
+  expect(loadingCalls).toBe(0);
+
+  const partial = await app.handle(new Request("http://localhost/", { method: "HEAD", headers: {
+    "x-brandy-navigation": "1", "x-brandy-current-url": "/",
+  } }));
+  expect(partial.status).toBe(200);
+  expect(partial.headers.get("x-brandy-stream")).toBe("1");
+  expect(partial.headers.get("x-brandy-retarget")).toBe("#brandy-slot-root");
+  expect(partial.body).toBeNull();
+  expect(loaderCalls).toBe(0);
+  expect(loadingCalls).toBe(0);
+});
 
 test("the skeleton streams before the loader resolves, real content after", async () => {
   const { promise: loaderGate, release } = gate();

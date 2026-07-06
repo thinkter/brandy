@@ -228,7 +228,10 @@ async function renderPipeline(
   // streaming it would mean no <html> shell is available to flush as the first chunk.
   const minIndex = mode === "document" ? 1 : 0;
   const streamIndex = findStreamingIndex(nodes, minIndex);
-  if (streamIndex >= 0) return renderPipelineStreaming(match, request, layouts, streamIndex, mode, options, sharedStatic, withMemoization);
+  if (streamIndex >= 0) {
+    if (options.head) return { kind: "stream", stream: new ReadableStream({ start(controller) { controller.close(); } }), status: 200 };
+    return renderPipelineStreaming(match, request, layouts, streamIndex, mode, options, sharedStatic, withMemoization);
+  }
   const core = await withMemoization(() => renderPipelineCore(match, request, layouts, options));
   return { kind: "sync", html: core.html, status: core.status, metadata: completedMetadata(match, core, sharedStatic) };
 }

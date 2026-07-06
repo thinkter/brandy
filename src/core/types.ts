@@ -15,6 +15,8 @@ export interface ErrorContext extends RequestContext {
 export interface RenderOptions {
   dev?: boolean;
   metadataMode?: "replace" | "merge";
+  /** Preserve streaming response metadata without starting body work for a HEAD request. */
+  head?: boolean;
 }
 
 export interface RenderContext<T = unknown> extends RequestContext {

@@ -303,6 +303,7 @@ export async function createBrandy(options: BrandyOptions): Promise<BrandyApplic
     const targetPath = normalizePathname(request.url);
     const targetResult = resolveMatch(manifest, targetPath);
     const headers = new Headers({ "content-type": "text/html; charset=utf-8" });
+    const requestRenderOptions = request.method === "HEAD" ? { ...renderOptions, head: true } : renderOptions;
     if (request.headers.get(PARTIAL_HEADER) === "1") {
       const currentPath = request.headers.get(CURRENT_URL_HEADER);
       if (!currentPath) return new Response("Missing x-brandy-current-url header", { status: 400, headers });
@@ -320,14 +321,14 @@ export async function createBrandy(options: BrandyOptions): Promise<BrandyApplic
         };
         const syntheticTarget: RouteMatch = { route: syntheticRoute, pathname: targetResult.match.pathname, params: targetResult.match.params };
         const diff: RouteDiff = { current, target: syntheticTarget, boundary: current.route.layouts[0]!, chainToRender: [] };
-        const rendered = await renderFragmentMatch(diff, request, { ...renderOptions, metadataMode: "merge" });
+        const rendered = await renderFragmentMatch(diff, request, { ...requestRenderOptions, metadataMode: "merge" });
         headers.set(RETARGET_HEADER, `#${MODAL_OUTLET_ID}`);
         headers.set(RESWAP_HEADER, "innerHTML");
         headers.set(TARGET_URL_HEADER, targetPath);
         headers.set("vary", `${PARTIAL_HEADER}, ${CURRENT_URL_HEADER}`);
         if (rendered.kind === "stream") {
           headers.set(STREAM_HEADER, "1");
-          return new Response(rendered.stream, { status: 200, headers });
+          return new Response(request.method === "HEAD" ? null : rendered.stream, { status: 200, headers });
         }
         return new Response(`${rendered.html}${metadataSwap(rendered.metadata, "merge")}`, { status: rendered.status, headers });
       }
@@ -341,20 +342,21 @@ export async function createBrandy(options: BrandyOptions): Promise<BrandyApplic
           diff = { current, target: targetResult.match, boundary, chainToRender: targetResult.match.route.layouts.slice(index) };
         }
       }
-      const rendered = await renderFragmentMatchCached(diff, request, renderOptions, renderCache);
+      const rendered = await renderFragmentMatchCached(diff, request, requestRenderOptions, renderCache);
       headers.set(RETARGET_HEADER, `#${slotId(diff.boundary.id)}`);
       headers.set(RESWAP_HEADER, "innerHTML");
       headers.set(TARGET_URL_HEADER, targetPath);
       headers.set("vary", `${PARTIAL_HEADER}, ${CURRENT_URL_HEADER}`);
       if (rendered.kind === "stream") {
         headers.set(STREAM_HEADER, "1");
-        return new Response(appendToStream(rendered.stream, modalClear), { status: targetResult.missing ? 404 : 200, headers });
+        return new Response(request.method === "HEAD" ? null : appendToStream(rendered.stream, modalClear), { status: targetResult.missing ? 404 : 200, headers });
       }
       return new Response(`${rendered.html}${metadataSwap(rendered.metadata)}${modalClear}`, { status: targetResult.missing ? 404 : rendered.status, headers });
     }
-    const rendered = await renderFullMatchCached(targetResult.match, request, renderOptions, renderCache);
+    const rendered = await renderFullMatchCached(targetResult.match, request, requestRenderOptions, renderCache);
     if (rendered.kind === "stream") {
       headers.set(STREAM_HEADER, "1");
+      if (request.method === "HEAD") return new Response(null, { status: targetResult.missing ? 404 : 200, headers });
       const stream = injectIntoFirstChunk(rendered.stream, (html) => {
         let document = injectClientRuntime(html, clientPath);
         if (stylesheetPath) document = injectStylesheet(document, stylesheetPath);
