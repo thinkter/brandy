@@ -1,3 +1,5 @@
+import { splitStream } from "./stream-utils.ts";
+
 declare const __BRANDY_ALPINE_CHUNK__: string;
 declare const __BRANDY_DEV__: boolean;
 
@@ -148,13 +150,7 @@ async function fetchPrefetch(url: URL): Promise<PrefetchedResult> {
     : { kind: "fragment", result: await readFragment(response) };
 }
 
-/** Splits a buffered stream on the sentinel comment the server emits between the skeleton and the
- * deferred real content. Returns null until the full sentinel has arrived in the buffer. */
-function splitStream(buffer: string): { skeleton: string; rest: string } | null {
-  const index = buffer.indexOf(STREAM_BOUNDARY);
-  if (index === -1) return null;
-  return { skeleton: buffer.slice(0, index), rest: buffer.slice(index + STREAM_BOUNDARY.length) };
-}
+// splitStream is imported from ./stream-utils.ts (pure utility, exported for testing)
 
 function applyFragment(result: FragmentResult, url: URL, historyMode: "push" | "none"): void {
   prefetchCache.clear();
