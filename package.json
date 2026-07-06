@@ -16,8 +16,7 @@
     "build": "bun src/cli.ts build",
     "start": "bun src/cli.ts start",
     "test": "bun test",
-    "typecheck": "tsc --noEmit",
-    "build:client": "bun build src/client/runtime-alpine.ts --target=browser --minify --outfile=dist/brandy.js"
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@elysiajs/html": "1.4.2",
