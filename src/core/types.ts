@@ -15,6 +15,9 @@ export interface ErrorContext extends RequestContext {
 export interface RenderOptions {
   dev?: boolean;
   metadataMode?: "replace" | "merge";
+  /** HTML to emit in the deferred slot when the deeper render fails after the skeleton has shipped.
+   *  Defaults to `"<p>Something went wrong.</p>"`.  Override to localise or theme the fallback. */
+  errorFallback?: string;
 }
 
 export interface RenderContext<T = unknown> extends RequestContext {
@@ -160,7 +163,9 @@ export interface SyncRenderedRoute {
 export interface StreamRenderedRoute {
   kind: "stream";
   stream: ReadableStream<Uint8Array>;
-  status: 200;
+  /** 200 in the normal case; 500 when the ancestor phase failed before any bytes were flushed.
+   *  Once the skeleton chunk has been sent the status is always 200 (HTTP headers already committed). */
+  status: 200 | 500;
 }
 
 export type RenderedRoute = SyncRenderedRoute | StreamRenderedRoute;
