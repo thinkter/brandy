@@ -1,10 +1,10 @@
 import { Html } from "@elysiajs/html";
-import { Island, type Metadata, type RenderContext } from "brandy";
+import { Island, type Metadata, type RenderContext, type RequestContext } from "brandy";
 
 export const metadata: Metadata = { title: "Settings · Brandy" };
 
-export function load({ request }: RenderContext<undefined>) {
-  return { prefetched: request.headers.get("x-brandy-prefetch") === "1" };
+export function load({ isPrefetch }: RequestContext) {
+  return { prefetched: isPrefetch };
 }
 
 type SettingsData = ReturnType<typeof load>;

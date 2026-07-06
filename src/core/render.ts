@@ -17,7 +17,7 @@ function outlet(layout: LayoutNode, children: string): JSX.Element {
 }
 
 function context(match: RouteMatch, request: Request): RequestContext {
-  return { params: match.params, request, url: new URL(request.url) };
+  return { params: match.params, request, url: new URL(request.url), isPrefetch: request.headers.get("x-brandy-prefetch") === "1" };
 }
 
 async function resolveMetadata<T>(value: MetadataExport<T> | undefined, props: RenderContext<T>): Promise<Metadata> {
