@@ -177,7 +177,7 @@ export async function addToCart(form) {
 
 The framework sees the `action` reference, generates the POST route, and wires the form to it. The **form is the wiring**, exactly as the **href is the wiring** for navigation. `revalidate()` reuses navigation machinery: re-run the segment's loader, render it naked, OOB-swap it into its slot. No new subsystem required — this is where Brandy is arguably *cheaper* than Next's `revalidatePath` (which leans on full RSC re-render). Progressive enhancement is free: no JS → native form post → full-nav fallback.
 
-**What it does not provide (the (b) half — "import and call as a typed function"):** there is no typed client RPC stub. The "call" is a form submission; arguments are form fields; the return is HTML. Server-side input typing is recovered via Elysia schemas, but the client gets no typed function. This is the same trade accepted by choosing HTML-over-the-wire over RSC (Decision D1) — not a defect.
+**What it does not provide (the (b) half — "import and call as a typed function"):** there is no typed client RPC stub. The "call" is a form submission; arguments are form fields; the return is HTML. Server-side input typing is handled in the route handler, but the client gets no typed function. This is the same trade accepted by choosing HTML-over-the-wire over RSC (Decision D1) — not a defect.
 
 **Pending / optimistic UI** (Next's `useFormStatus` / `useOptimistic`) is client state → the adopted dependency's job, not Brandy's.
 
