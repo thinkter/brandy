@@ -1,5 +1,5 @@
 import { afterAll, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { bun, cloudflare, vercel } from "brandy/adapters";
 import { buildApplication } from "brandy/build";
@@ -52,13 +52,16 @@ test("adapter factories expose stable runtime descriptors", () => {
   expect(vercel({ runtime: "edge" }).runtime).toBe("vercel-edge");
 });
 
-test("Bun output serves framework and public assets with appropriate cache policies", async () => {
+test("Bun output serves warmed prerenders through its mutable cache and caches static assets", async () => {
   const { root, config } = await fixture();
   const output = join(root, "bun");
   const port = 32_000 + Math.floor(Math.random() * 1_000);
   config.port = port;
   config.adapter = bun({ outputDir: output });
   expect(await buildApplication(config)).toBe(output);
+  const snapshot = JSON.parse(await readFile(join(output, "prerender-cache.json"), "utf8"));
+  expect(Object.keys(snapshot).length).toBeGreaterThan(0);
+  await expect(access(join(output, "public/_brandy/pages"))).rejects.toThrow();
 
   const child = Bun.spawn([process.execPath, join(output, "server.js")], { stdout: "ignore", stderr: "pipe" });
   try {
@@ -69,6 +72,11 @@ test("Bun output serves framework and public assets with appropriate cache polic
     }
     expect(response?.status).toBe(200);
     expect(await response!.text()).toContain("portable");
+    expect(response!.headers.get("cache-control")).toBeNull();
+    const head = await fetch(`http://localhost:${port}/`, { method: "HEAD" });
+    expect(head.status).toBe(200);
+    expect(head.headers.get("cache-control")).toBeNull();
+    expect(await head.text()).toBe("");
     const metadata = JSON.parse(await readFile(join(output, "build.json"), "utf8"));
     const runtime = await fetch(`http://localhost:${port}${metadata.assets.runtime}`);
     expect(runtime.headers.get("cache-control")).toBe("public, max-age=31536000, immutable");

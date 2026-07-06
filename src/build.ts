@@ -258,7 +258,11 @@ export async function buildApplication(config: ResolvedConfig): Promise<string> 
     return `registerAction(${JSON.stringify(action.id)},${JSON.stringify(action.path)},${JSON.stringify(action.segmentPath)},${JSON.stringify(action.file)},${JSON.stringify(action.name)},${mod}[${JSON.stringify(action.name)}])`;
   });
   const prerenderSnapshot = await warmPrerenderCache(manifest);
-  const staticOutput = await renderStaticDocuments(manifest, config, compiledAssets);
+  // Bun keeps prerendered routes in its mutable runtime cache so actions can revalidate them.
+  // Only immutable serverless adapters should bypass the runtime with static documents.
+  const staticOutput = adapterRejectsMutableCache(config.adapter.runtime)
+    ? await renderStaticDocuments(manifest, config, compiledAssets)
+    : { documents: {}, routes: {} };
   const serverImport = new URL("./server.ts", import.meta.url).pathname;
   const rootNotFoundModule = imported(await nearest(config.appDir, config.appDir, NOT_FOUND_FILES));
   const commonSource = `${[...imports].map(([file, name]) => `import * as ${name} from ${JSON.stringify(file)};`).join("\n")}
@@ -284,11 +288,10 @@ const config=${config.configFile ? `${imported(config.configFile)}.default ?? {}
     await writeStaticAssets(staticDir, config, compiledAssets, staticOutput.documents);
     const source = `${commonSource}
 const app=await createBrandy({${appOptions}});
-const staticRoutes={};
 const staticAssets=new Set(${JSON.stringify([...publicAssetPaths, ...frameworkPaths])});
 const immutablePublicAssets=new Set(${JSON.stringify(fingerprintedPublicAssetPaths)});
 const publicRoot=${JSON.stringify(staticDir)};
-const server=Bun.serve({port:Number(process.env.PORT)||${config.port},hostname:process.env.HOST||${JSON.stringify(config.host)},async fetch(request){const url=new URL(request.url);if((request.method==="GET"||request.method==="HEAD")&&request.headers.get("x-brandy-navigation")!=="1"){const path=staticRoutes[url.pathname]??(staticAssets.has(url.pathname)?url.pathname:undefined);if(path){const file=Bun.file(publicRoot+path);if(await file.exists()){const immutable=path.startsWith("/_brandy/")||immutablePublicAssets.has(path);const headers={"cache-control":immutable?"public, max-age=31536000, immutable":"public, max-age=3600"};return new Response(request.method==="HEAD"?null:file,{headers});}}}return app.handle(request);}});
+const server=Bun.serve({port:Number(process.env.PORT)||${config.port},hostname:process.env.HOST||${JSON.stringify(config.host)},async fetch(request){const url=new URL(request.url);if((request.method==="GET"||request.method==="HEAD")&&request.headers.get("x-brandy-navigation")!=="1"){const path=staticAssets.has(url.pathname)?url.pathname:undefined;if(path){const file=Bun.file(publicRoot+path);if(await file.exists()){const immutable=path.startsWith("/_brandy/")||immutablePublicAssets.has(path);const headers={"cache-control":immutable?"public, max-age=31536000, immutable":"public, max-age=3600"};return new Response(request.method==="HEAD"?null:file,{headers});}}}return app.handle(request);}});
 console.log(\`Brandy listening at \${server.url}\`);
 `;
     await bundleSource(source, join(output, "server.js"), "bun");
