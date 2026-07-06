@@ -330,6 +330,11 @@ export async function createBrandy(options: BrandyOptions): Promise<BrandyApplic
       }
       return new Response(`${rendered.html}${metadataSwap(rendered.metadata)}${modalClear}`, { status: targetResult.missing ? 404 : rendered.status, headers });
     }
+    // Emit Vary on full-document responses too so that CDNs never serve a
+    // cached full document in response to a fragment request (x-brandy-navigation: 1).
+    // Any request can opt into fragment mode via that header, so the Vary contract
+    // must apply unconditionally to both response types.
+    headers.set("vary", `${PARTIAL_HEADER}, ${CURRENT_URL_HEADER}`);
     const rendered = await renderFullMatchCached(targetResult.match, request, renderOptions, renderCache);
     if (rendered.kind === "stream") {
       headers.set(STREAM_HEADER, "1");
