@@ -17,6 +17,89 @@ const HOVER_DELAY = 100;
 
 let renderedURL = location.pathname + location.search;
 
+// Take over scroll position management so popstate can restore exact offsets.
+history.scrollRestoration = "manual";
+
+/** Lightweight live region used to announce page changes to screen readers. */
+let liveRegion: HTMLElement | null = null;
+
+function getLiveRegion(): HTMLElement {
+  if (!liveRegion) {
+    liveRegion = document.createElement("div");
+    liveRegion.setAttribute("aria-live", "assertive");
+    liveRegion.setAttribute("aria-atomic", "true");
+    // Visually hidden but reachable by assistive technology.
+    Object.assign(liveRegion.style, {
+      position: "absolute",
+      width: "1px",
+      height: "1px",
+      padding: "0",
+      overflow: "hidden",
+      clip: "rect(0,0,0,0)",
+      whiteSpace: "nowrap",
+      border: "0",
+    });
+    document.body.appendChild(liveRegion);
+  }
+  return liveRegion;
+}
+
+/** Announce a navigation to screen readers via the live region. */
+function announceNavigation(): void {
+  const title = document.title;
+  const region = getLiveRegion();
+  // Clear first so repeated same-page announcements still fire.
+  region.textContent = "";
+  // Small delay lets the DOM settle before the announcement is read.
+  setTimeout(() => { region.textContent = title || "Page loaded"; }, 50);
+}
+
+/** Move keyboard focus into the freshly swapped region. */
+function manageFocus(target: Element): void {
+  // Prefer an autofocus element inside the new content.
+  const autofocusEl = target.querySelector<HTMLElement>("[autofocus]");
+  if (autofocusEl) {
+    autofocusEl.focus();
+    return;
+  }
+  // Otherwise focus the region itself so Tab works naturally from the new content.
+  if (!target.hasAttribute("tabindex")) target.setAttribute("tabindex", "-1");
+  (target as HTMLElement).focus({ preventScroll: true });
+}
+
+/** Capture current scroll offsets into the current history entry. */
+function saveScrollPosition(): void {
+  history.replaceState(
+    { ...history.state, __brandy_scroll__: { x: scrollX, y: scrollY } },
+    "",
+  );
+}
+
+/** Scroll to a position recorded in a history entry, or fall back to the top. */
+function restoreScrollPosition(state: unknown): void {
+  const pos = state != null && typeof state === "object" && "__brandy_scroll__" in state
+    ? (state as { __brandy_scroll__: { x: number; y: number } }).__brandy_scroll__
+    : null;
+  if (pos) {
+    scrollTo(pos.x, pos.y);
+  } else {
+    scrollTo(0, 0);
+  }
+}
+
+/** After a push navigation: scroll to hash target or reset to top. */
+function scrollAfterPush(url: URL): void {
+  if (url.hash) {
+    const id = url.hash.slice(1);
+    const target = document.getElementById(id);
+    if (target) {
+      target.scrollIntoView();
+      return;
+    }
+  }
+  scrollTo(0, 0);
+}
+
 interface FragmentResult {
   html: string;
   retarget: string | null;
@@ -176,11 +259,16 @@ function applyFragment(result: FragmentResult, url: URL, historyMode: "push" | "
     target.replaceChildren(template.content.cloneNode(true));
   }
   const finalURL = result.finalURL ?? `${url.pathname}${url.search}`;
-  if (historyMode === "push" || finalURL !== renderedURL && url.pathname.startsWith("/_brandy/actions/")) {
+  const isPush = historyMode === "push" || finalURL !== renderedURL && url.pathname.startsWith("/_brandy/actions/");
+  if (isPush) {
+    saveScrollPosition();
     history.pushState({}, "", finalURL);
+    scrollAfterPush(new URL(finalURL, location.href));
   }
   renderedURL = finalURL;
   reinitialize(target);
+  manageFocus(target);
+  announceNavigation();
 }
 
 async function applyStreamedFragment(response: Response, url: URL, historyMode: "push" | "none"): Promise<void> {
@@ -224,11 +312,16 @@ async function applyStreamedFragment(response: Response, url: URL, historyMode: 
   }
 
   const finalURL = finalURLHeader ?? `${url.pathname}${url.search}`;
-  if (historyMode === "push" || finalURL !== renderedURL && url.pathname.startsWith("/_brandy/actions/")) {
+  const isPush = historyMode === "push" || finalURL !== renderedURL && url.pathname.startsWith("/_brandy/actions/");
+  if (isPush) {
+    saveScrollPosition();
     history.pushState({}, "", finalURL);
+    scrollAfterPush(new URL(finalURL, location.href));
   }
   renderedURL = finalURL;
   reinitialize(target);
+  manageFocus(target);
+  announceNavigation();
 
   if (buffer) {
     const restTemplate = document.createElement("template");
@@ -365,8 +458,11 @@ document.addEventListener("submit", (event) => {
   }
 });
 
-addEventListener("popstate", () => {
-  void navigate(new URL(location.href), undefined, "none");
+addEventListener("popstate", (event) => {
+  const targetState = event.state as unknown;
+  void navigate(new URL(location.href), undefined, "none").then(() => {
+    restoreScrollPosition(targetState);
+  });
 });
 
 export {};
