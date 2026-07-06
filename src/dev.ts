@@ -19,10 +19,13 @@ export async function runDev(initialConfig: ResolvedConfig): Promise<never> {
   const setup = async (app: Parameters<NonNullable<ResolvedConfig["setup"]>>[0]) => {
     await config.setup?.(app);
     app.get("/_brandy/dev.js", () => new Response(DEV_CLIENT, { headers: { "content-type": "text/javascript", "cache-control": "no-cache" } }));
-    app.get("/_brandy/dev-events", () => new Response(new ReadableStream({
-      start(controller) { clients.add(controller); controller.enqueue(": connected\n\n"); },
-      cancel(controller) { clients.delete(controller as unknown as ReadableStreamDefaultController); },
-    }), { headers: { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" } }));
+    app.get("/_brandy/dev-events", () => {
+      let clientController: ReadableStreamDefaultController;
+      return new Response(new ReadableStream({
+        start(controller) { clientController = controller; clients.add(controller); controller.enqueue(": connected\n\n"); },
+        cancel(_reason) { clients.delete(clientController); },
+      }), { headers: { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" } });
+    });
   };
   let current = await createDevelopmentApp({ appDir: config.appDir, alpine: config.alpine, stylesheet: styles, stylesheetPath: styles ? "/_brandy/app.css" : undefined, publicDir: config.publicDir, trustedOrigins: config.trustedOrigins, dev: true, setup, cacheBust: String(version) });
   const port = config.port; const hostname = config.host;
