@@ -190,6 +190,33 @@ function injectAlpineModulePreload(document: string, alpineChunkPath: string): s
   return insertBeforeClosingTag(document, "head", link) ?? `${link}${document}`;
 }
 
+/** A streamed page can reveal its first Island only after the document head has flushed.
+ * In that case, emit the preload immediately before the deferred swap chunk so the browser
+ * starts fetching Alpine before the swap script initializes the newly inserted Island. */
+function injectDeferredAlpineModulePreload(stream: ReadableStream<Uint8Array>, alpineChunkPath: string): ReadableStream<Uint8Array> {
+  const decoder = new TextDecoder();
+  const encoder = new TextEncoder();
+  const link = `<link rel="modulepreload" href="${escapeAttribute(alpineChunkPath)}">`;
+  let preloadInjected = false;
+  let suffix = "";
+  return stream.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
+    transform(chunk, controller) {
+      let html = decoder.decode(chunk, { stream: true });
+      if (hasElementAttribute(html, "link", "href", alpineChunkPath)) preloadInjected = true;
+      if (!preloadInjected && `${suffix}${html}`.includes("data-brandy-island")) {
+        html = `${link}${html}`;
+        preloadInjected = true;
+      }
+      suffix = `${suffix}${html}`.slice(-"data-brandy-island".length);
+      controller.enqueue(encoder.encode(html));
+    },
+    flush(controller) {
+      const rest = decoder.decode();
+      if (rest) controller.enqueue(encoder.encode(rest));
+    },
+  }));
+}
+
 function injectDevRuntime(document: string): string {
   if (hasElementAttribute(document, "script", "src", "/_brandy/dev.js")) return document;
   const script = `<script type="module" src="/_brandy/dev.js"></script>`;
@@ -357,7 +384,7 @@ export async function createBrandy(options: BrandyOptions): Promise<BrandyApplic
     if (rendered.kind === "stream") {
       headers.set(STREAM_HEADER, "1");
       if (request.method === "HEAD") return new Response(null, { status: targetResult.missing ? 404 : 200, headers });
-      const stream = injectIntoFirstChunk(rendered.stream, (html) => {
+      let stream = injectIntoFirstChunk(rendered.stream, (html) => {
         let document = injectClientRuntime(html, clientPath);
         if (stylesheetPath) document = injectStylesheet(document, stylesheetPath);
         if (alpineChunkPath) {
@@ -368,6 +395,7 @@ export async function createBrandy(options: BrandyOptions): Promise<BrandyApplic
         if (hasInterceptedRoutes) document = injectModalOutlet(document);
         return document;
       });
+      if (alpineChunkPath) stream = injectDeferredAlpineModulePreload(stream, alpineChunkPath);
       return new Response(stream, { status: targetResult.missing ? 404 : 200, headers });
     }
     let document = injectClientRuntime(injectMetadata(rendered.html, rendered.metadata), clientPath);

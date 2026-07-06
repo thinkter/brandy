@@ -352,6 +352,61 @@ test("cold-load streaming flushes the skeleton fast, injects assets into the fir
   }
 });
 
+test("a deferred Island emits an Alpine preload even when the streaming skeleton has no Island", async () => {
+  const root = await mkdtemp(join(process.cwd(), ".brandy-test-deferred-island-"));
+  const dir = join(root, "app");
+  await mkdir(dir, { recursive: true });
+  await Promise.all([
+    writeFile(join(dir, "layout.tsx"), `
+      import { Html } from "@elysiajs/html";
+      export default function Layout({ children }) {
+        return <html><head></head><body>{children}</body></html>;
+      }
+    `),
+    writeFile(join(dir, "loading.tsx"), `
+      import { Html } from "@elysiajs/html";
+      export default function Loading() {
+        return <main>SKELETON-WITHOUT-ISLAND</main>;
+      }
+    `),
+    writeFile(join(dir, "page.tsx"), `
+      import { Html } from "@elysiajs/html";
+      import { Island } from "brandy";
+      export async function load() {
+        await Bun.sleep(10);
+        return { value: "DEFERRED-ISLAND" };
+      }
+      export default function Page({ data }) {
+        return <Island><main>{data.value}</main></Island>;
+      }
+    `),
+  ]);
+
+  try {
+    const app = await createBrandy({ appDir: dir });
+    const response = await app.handle(new Request("http://localhost/"));
+    const reader = response.body!.getReader();
+    const decoder = new TextDecoder();
+    const first = await reader.read();
+    const firstChunk = decoder.decode(first.value, { stream: true });
+    expect(firstChunk).toContain("SKELETON-WITHOUT-ISLAND");
+    expect(firstChunk).not.toContain('rel="modulepreload"');
+
+    let rest = "";
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (value) rest += decoder.decode(value, { stream: true });
+      if (done) break;
+    }
+    rest += decoder.decode();
+    expect(rest).toContain("DEFERRED-ISLAND");
+    expect(rest.match(/<link rel="modulepreload" href="\/_brandy\/alpine\.js">/g)).toHaveLength(1);
+    expect(rest.indexOf('rel="modulepreload"')).toBeLessThan(rest.indexOf("DEFERRED-ISLAND"));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("compiled client runtime understands the streaming wire format", async () => {
   const app = await createBrandy({ appDir });
   const response = await app.handle(new Request("http://localhost/_brandy/runtime.js"));
