@@ -27,9 +27,10 @@ function publicAssetHandler(publicDir: string | false | undefined) {
 
 export async function createDevelopmentApp(options: DevelopmentAppOptions = {}) {
   const manifest = await buildManifest(options.appDir ?? "app", options.cacheBust);
-  const alpineChunkPath = options.alpineChunkPath ?? DEFAULT_ALPINE_CHUNK_PATH;
-  const runtime = options.runtime ?? await compiledRuntime(alpineChunkPath, options.dev === true);
-  const alpineChunk = options.alpineChunk ?? (options.alpine === false ? undefined : await compiledAlpineChunk());
+  const alpineEnabled = options.alpine !== false;
+  const alpineChunkPath = alpineEnabled ? options.alpineChunkPath ?? DEFAULT_ALPINE_CHUNK_PATH : undefined;
+  const runtime = options.runtime ?? await compiledRuntime(alpineChunkPath ?? DEFAULT_ALPINE_CHUNK_PATH, options.dev === true);
+  const alpineChunk = options.alpineChunk ?? (alpineEnabled ? await compiledAlpineChunk() : undefined);
   return createBrandy({
     ...options,
     manifest,

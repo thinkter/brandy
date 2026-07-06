@@ -177,6 +177,12 @@ function injectStylesheet(document: string, stylesheet: string): string {
   return insertBeforeClosingTag(document, "head", link) ?? `${link}${document}`;
 }
 
+function injectAlpineCloakStyle(document: string): string {
+  if (hasElementAttribute(document, "style", "data-brandy-cloak", "")) return document;
+  const style = `<style data-brandy-cloak>[x-cloak]{display:none!important}</style>`;
+  return insertBeforeClosingTag(document, "head", style) ?? `${style}${document}`;
+}
+
 function injectDevRuntime(document: string): string {
   if (hasElementAttribute(document, "script", "src", "/_brandy/dev.js")) return document;
   const script = `<script type="module" src="/_brandy/dev.js"></script>`;
@@ -345,6 +351,7 @@ export async function createBrandy(options: BrandyOptions): Promise<BrandyApplic
       const stream = injectIntoFirstChunk(rendered.stream, (html) => {
         let document = injectClientRuntime(html, clientPath);
         if (stylesheetPath) document = injectStylesheet(document, stylesheetPath);
+        if (alpineChunkPath) document = injectAlpineCloakStyle(document);
         if (options.dev) document = injectDevRuntime(document);
         if (hasInterceptedRoutes) document = injectModalOutlet(document);
         return document;
@@ -353,6 +360,7 @@ export async function createBrandy(options: BrandyOptions): Promise<BrandyApplic
     }
     let document = injectClientRuntime(injectMetadata(rendered.html, rendered.metadata), clientPath);
     if (stylesheetPath) document = injectStylesheet(document, stylesheetPath);
+    if (alpineChunkPath) document = injectAlpineCloakStyle(document);
     if (options.dev) document = injectDevRuntime(document);
     if (hasInterceptedRoutes) document = injectModalOutlet(document);
     return new Response(request.method === "HEAD" ? null : document, { status: targetResult.missing ? 404 : rendered.status, headers });

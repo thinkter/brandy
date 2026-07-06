@@ -212,8 +212,22 @@ test("the example uses Alpine islands without a custom client entrypoint", async
 test("Island renders an explicit data-brandy-island boundary", async () => {
   const { Island } = await import("brandy");
   const html = String(Island({ children: "<span>hi</span>" as unknown as JSX.Element }));
-  expect(html).toContain("data-brandy-island");
+  expect(html).toBe("<div data-brandy-island><span>hi</span></div>");
+
+  const section = String(Island({ tag: "section", children: "<span>hi</span>" as unknown as JSX.Element }));
+  expect(section).toBe("<section data-brandy-island><span>hi</span></section>");
   expect(html).toContain("<span>hi</span>");
+});
+
+test("Alpine cloak CSS is automatic and scoped to Alpine-enabled applications", async () => {
+  const enabled = await createBrandy({ appDir });
+  const enabledHtml = await (await enabled.handle(new Request("http://localhost/"))).text();
+  expect(enabledHtml.match(/<style data-brandy-cloak>/g)).toHaveLength(1);
+  expect(enabledHtml).toContain("[x-cloak]{display:none!important}");
+
+  const disabled = await createBrandy({ appDir, alpine: false });
+  const disabledHtml = await (await disabled.handle(new Request("http://localhost/"))).text();
+  expect(disabledHtml).not.toContain("data-brandy-cloak");
 });
 
 test("development cache busting preserves server action URLs", async () => {

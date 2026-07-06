@@ -230,13 +230,15 @@ Navigation and server data are Brandy's responsibility. Client state is Alpine's
 ```tsx
 import { Island } from "brandy"
 
-<Island>
+<Island tag="section">
   <div x-data="{ open: false }">
     <button x-on:click="open = !open">Toggle</button>
-    <p x-show="open">Client-side state</p>
+    <p x-show="open" x-cloak="">Client-side state</p>
   </div>
 </Island>
 ```
+
+An Island renders a `<div>` boundary by default. Pass `tag` to use another HTML element when the wrapper needs different semantics or layout behavior. When Alpine is enabled, Brandy automatically injects `[x-cloak]{display:none!important}` so Alpine's `x-cloak` directive prevents pre-initialization flashes without application CSS.
 
 Alpine attributes outside an `<Island>` render as inert HTML and never become interactive; `brandy dev` logs a console warning when it finds one. Island state is client-side only, so a fragment swap that replaces an island resets its state.
 

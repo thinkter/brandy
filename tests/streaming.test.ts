@@ -266,6 +266,7 @@ test("cold-load streaming flushes the skeleton fast, injects assets into the fir
     // they don't depend on the loader, so they must not wait for the rest of the stream.
     expect(firstChunk).toContain("/_brandy/runtime.js");
     expect(firstChunk).toContain("/_brandy/app.css");
+    expect(firstChunk).toContain("[x-cloak]{display:none!important}");
     expect(firstChunk).toContain("/_brandy/dev.js");
     expect(firstChunk).toContain("SKELETON-MARKER");
     expect(firstChunk).not.toContain("REAL-MARKER");
