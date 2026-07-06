@@ -32,10 +32,10 @@ export function matchRoute(manifest: RouteManifest, url: string): RouteMatch {
   return { route, pathname, params: paramsFor(route, pathname) };
 }
 
-/** Pure route-tree diff. The returned boundary and fragment chain are inseparable. */
-export function diffRoutes(manifest: RouteManifest, currentURL: string, targetURL: string): RouteDiff {
-  const current = matchRoute(manifest, currentURL);
-  const target = matchRoute(manifest, targetURL);
+/** Computes the layout-chain diff between two already-resolved route matches.
+ * Walks the longest common prefix of their layout chains to find the divergence
+ * boundary and the fragment chain that must be re-rendered. */
+export function diffLayoutChains(current: RouteMatch, target: RouteMatch): RouteDiff {
   const oldLayouts = current.route.layouts;
   const newLayouts = target.route.layouts;
   let shared = 0;
@@ -54,4 +54,11 @@ export function diffRoutes(manifest: RouteManifest, currentURL: string, targetUR
     boundary,
     chainToRender: newLayouts.slice(shared),
   };
+}
+
+/** Pure route-tree diff. The returned boundary and fragment chain are inseparable. */
+export function diffRoutes(manifest: RouteManifest, currentURL: string, targetURL: string): RouteDiff {
+  const current = matchRoute(manifest, currentURL);
+  const target = matchRoute(manifest, targetURL);
+  return diffLayoutChains(current, target);
 }
