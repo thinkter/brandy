@@ -20,9 +20,9 @@
   },
   "dependencies": {
     "@elysiajs/html": "1.4.2",
+    "@kitajs/html": "4.2.13",
     "@tailwindcss/cli": "^4.3.2",
     "alpinejs": "^3.15.12",
-    "elysia": "1.4.29",
     "tailwindcss": "^4.3.2"
   },
   "devDependencies": {
