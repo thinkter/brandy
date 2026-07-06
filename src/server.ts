@@ -265,7 +265,10 @@ export async function createBrandy(options: BrandyOptions): Promise<BrandyApplic
     if (!action) return new Response("Unknown action", { status: 404 });
     const currentPath = normalizePathname(request.headers.get(CURRENT_URL_HEADER) ?? request.headers.get("referer") ?? "/");
     const current = resolveMatch(manifest, currentPath).match;
-    const result = await action.handler(await request.formData(), { params: current.params, request, url: new URL(currentPath, request.url) });
+    // params and url are derived from server-trusted sources only.
+    // params: the action endpoint itself has no dynamic path segments, so params are always empty.
+    // url: use the actual request URL so the query string is never lost.
+    const result = await action.handler(await request.formData(), { params: {}, request, url: new URL(request.url) });
     if (result instanceof Response) return result;
     const targetPath = normalizePathname(isRevalidation(result) ? result.path : currentPath);
     const target = resolveMatch(manifest, targetPath).match;
