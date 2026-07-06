@@ -2,7 +2,7 @@ import type {} from "./alpine-jsx.d.ts";
 import { applyRenderSnapshot, createMemoryRenderCache, renderFragmentMatchCached, renderFragmentMatchFresh, renderFullMatchCached } from "./core/cache.ts";
 import type { RenderCache, RenderCacheEntry } from "./core/cache.ts";
 import { isRevalidation } from "./core/control.ts";
-import { matchRoute, RouteNotFoundError } from "./core/diff.ts";
+import { diffLayoutChains, matchRoute, RouteNotFoundError } from "./core/diff.ts";
 import { hasElementAttribute, insertBeforeClosingTag } from "./core/html.ts";
 import { escapeAttribute, normalizePathname, slotId } from "./core/path.ts";
 import { injectMetadata, metadataSwap, renderFragmentMatch, streamSwap } from "./core/render.ts";
@@ -149,14 +149,6 @@ function sameSegments(a: string[], b: string[]): boolean {
   return a.length === b.length && a.every((segment, index) => segment === b[index]);
 }
 
-function diffMatches(current: RouteMatch, target: RouteMatch) {
-  let shared = 0;
-  while (shared < current.route.layouts.length && shared < target.route.layouts.length && current.route.layouts[shared]!.id === target.route.layouts[shared]!.id) shared++;
-  const boundary = target.route.layouts[Math.max(0, shared - 1)];
-  if (!boundary) throw new Error("Routes do not share a root layout");
-  return { current, target, boundary, chainToRender: target.route.layouts.slice(shared) };
-}
-
 function isFingerprintedAsset(path: string): boolean {
   return /^\/_brandy\/(?:runtime|app|alpine)\.[a-f0-9]{8,64}\.(?:js|css)$/.test(path);
 }
@@ -276,7 +268,7 @@ export async function createBrandy(options: BrandyOptions): Promise<BrandyApplic
     const headers = new Headers({ [TARGET_URL_HEADER]: targetPath, "content-type": "text/html; charset=utf-8" });
 
     if (request.headers.get(PARTIAL_HEADER) === "1") {
-      const diff = diffMatches(current, target);
+      const diff = diffLayoutChains(current, target);
       const rendered = await renderFragmentMatchFresh(diff, targetRequest, renderOptions, renderCache);
       headers.set(RETARGET_HEADER, `#${slotId(diff.boundary.id)}`);
       headers.set(RESWAP_HEADER, "innerHTML");
@@ -326,7 +318,7 @@ export async function createBrandy(options: BrandyOptions): Promise<BrandyApplic
       }
 
       const refresh = request.headers.get(REFRESH_BOUNDARY_HEADER);
-      let diff = diffMatches(current, targetResult.match);
+      let diff = diffLayoutChains(current, targetResult.match);
       if (refresh) {
         const index = targetResult.match.route.layouts.findIndex((layout) => layout.id === refresh);
         if (index >= 0) {
