@@ -119,7 +119,7 @@ beforeAll(async () => {
   // from affecting other test files (e.g. the integration tests that need the
   // native Bun FormData constructor).
   const keys = ["window", "document", "location", "history", "addEventListener",
-    "removeEventListener", "HTMLFormElement", "FormData", "fetch",
+    "removeEventListener", "HTMLFormElement", "FormData", "fetch", "scrollTo",
     "__BRANDY_ALPINE_CHUNK__", "__BRANDY_DEV__"];
   for (const key of keys) {
     savedGlobals[key] = (globalThis as Record<string, unknown>)[key];
@@ -137,6 +137,12 @@ beforeAll(async () => {
   // The runtime builds FormData from the form element; Bun's native FormData
   // constructor does not understand happy-dom elements, so we replace it too.
   (globalThis as Record<string, unknown>)["FormData"] = sharedWin.FormData;
+
+  // The scroll-management code reads bare scrollX/scrollY and calls scrollTo();
+  // delegate to the happy-dom window with live getters so values stay current.
+  (globalThis as Record<string, unknown>)["scrollTo"] = sharedWin.scrollTo.bind(sharedWin);
+  Object.defineProperty(globalThis, "scrollX", { get: () => sharedWin.scrollX, configurable: true });
+  Object.defineProperty(globalThis, "scrollY", { get: () => sharedWin.scrollY, configurable: true });
 
   // Build-time constants declared by runtime.ts
   (globalThis as Record<string, unknown>)["__BRANDY_ALPINE_CHUNK__"] = "/fake-alpine.js";
@@ -162,6 +168,10 @@ beforeAll(async () => {
 // other test files that run in the same Bun worker (e.g. integration.test.ts)
 // get the original native implementations back.
 afterAll(() => {
+  // scrollX/scrollY were defined as getter-only properties; remove them before
+  // plain reassignment below (they are not in savedGlobals — Bun has no native ones).
+  delete (globalThis as Record<string, unknown>)["scrollX"];
+  delete (globalThis as Record<string, unknown>)["scrollY"];
   for (const [key, value] of Object.entries(savedGlobals)) {
     (globalThis as Record<string, unknown>)[key] = value;
   }
