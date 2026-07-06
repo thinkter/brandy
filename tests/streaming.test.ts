@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
-  memoizeLoader, renderFragmentMatch, renderFullMatch,
+  memoizeLoader, renderFragmentMatch, renderFullMatch, STREAM_ERROR_MARKER,
   type LayoutNode, type PageNode, type Route, type RouteDiff, type RouteMatch,
 } from "brandy";
 import { createDevelopmentApp as createBrandy } from "brandy/build";
@@ -320,4 +320,154 @@ test("compiled client runtime understands the streaming wire format", async () =
   expect(source).toContain("brandy:stream-boundary");
   expect(source).toContain("data-brandy-stream-target");
   expect(source).toContain("brandyStreamTarget");
+});
+
+// ── Issue #12: streaming error path tests ────────────────────────────────────
+
+async function drainStream(stream: ReadableStream<Uint8Array>): Promise<string> {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let result = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (value) result += decoder.decode(value, { stream: true });
+    if (done) break;
+  }
+  return result + decoder.decode();
+}
+
+test("ancestor layout failure emits STREAM_ERROR_MARKER and sets status 500", async () => {
+  const root: LayoutNode = {
+    id: "root", directory: "/app", file: "/app/layout.tsx",
+    render: () => { throw new Error("ancestor boom"); },
+  };
+  const page: PageNode = {
+    id: "root/page", directory: "/app", file: "/app/page.tsx",
+    render: () => `<main>page</main>` as JSX.Element,
+    renderLoading: () => `<main>SKELETON</main>` as JSX.Element,
+  };
+  const route: Route = { id: "/", pattern: "/", segments: [], layouts: [root], page, pageFile: page.file, renderPage: page.render };
+  const match: RouteMatch = { route, pathname: "/", params: {} };
+
+  const rendered = await renderFullMatch(match, new Request("http://localhost/"));
+  expect(rendered.kind).toBe("stream");
+  if (rendered.kind !== "stream") throw new Error("expected streaming render");
+  expect(rendered.status).toBe(500);
+  const html = await drainStream(rendered.stream);
+  expect(html).toContain(STREAM_ERROR_MARKER);
+});
+
+test("ancestor layout failure logs the error", async () => {
+  const logged: unknown[][] = [];
+  const originalConsoleError = console.error;
+  console.error = (...args: unknown[]) => { logged.push(args); };
+  try {
+    const root: LayoutNode = {
+      id: "root", directory: "/app", file: "/app/layout.tsx",
+      render: () => { throw new Error("logged ancestor error"); },
+    };
+    const page: PageNode = {
+      id: "root/page", directory: "/app", file: "/app/page.tsx",
+      render: () => `<main>page</main>` as JSX.Element,
+      renderLoading: () => `<main>SKELETON</main>` as JSX.Element,
+    };
+    const route: Route = { id: "/", pattern: "/", segments: [], layouts: [root], page, pageFile: page.file, renderPage: page.render };
+    const match: RouteMatch = { route, pathname: "/", params: {} };
+
+    const rendered = await renderFullMatch(match, new Request("http://localhost/"), { dev: true });
+    if (rendered.kind !== "stream") throw new Error("expected streaming render");
+    await drainStream(rendered.stream);
+
+    expect(logged.length).toBeGreaterThan(0);
+    const firstArg = String(logged[0]?.[0] ?? "");
+    expect(firstArg).toContain("brandy");
+    expect(firstArg).toContain("ancestor");
+  } finally {
+    console.error = originalConsoleError;
+  }
+});
+
+test("deferred render failure uses default error fallback and logs the error", async () => {
+  const { promise: loaderGate, release } = gate();
+  const logged: unknown[][] = [];
+  const originalConsoleError = console.error;
+  console.error = (...args: unknown[]) => { logged.push(args); };
+  try {
+    const root: LayoutNode = {
+      id: "root", directory: "/app", file: "/app/layout.tsx",
+      render: ({ children }) => `<html><body>${children}</body></html>` as JSX.Element,
+    };
+    const page: PageNode = {
+      id: "root/page", directory: "/app", file: "/app/page.tsx",
+      load: async () => { await loaderGate; throw new Error("deferred boom"); },
+      render: () => `<main>page</main>` as JSX.Element,
+      renderLoading: () => `<main>SKELETON</main>` as JSX.Element,
+      // no renderError boundary — falls through to the catch
+    };
+    const route: Route = { id: "/", pattern: "/", segments: [], layouts: [root], page, pageFile: page.file, renderPage: page.render };
+    const match: RouteMatch = { route, pathname: "/", params: {} };
+
+    const rendered = await renderFullMatch(match, new Request("http://localhost/"), { dev: true });
+    if (rendered.kind !== "stream") throw new Error("expected streaming render");
+    // Status is still 200: headers were already committed when the skeleton was flushed.
+    expect(rendered.status).toBe(200);
+
+    const reader = rendered.stream.getReader();
+    const decoder = new TextDecoder();
+    const first = await reader.read();
+    expect(decoder.decode(first.value, { stream: true })).toContain("SKELETON");
+
+    release();
+    let rest = "";
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (value) rest += decoder.decode(value, { stream: true });
+      if (done) break;
+    }
+    rest += decoder.decode();
+    // Default English fallback is present in the deferred slot.
+    expect(rest).toContain("Something went wrong.");
+    // Error was logged.
+    expect(logged.length).toBeGreaterThan(0);
+    const firstArg = String(logged[0]?.[0] ?? "");
+    expect(firstArg).toContain("brandy");
+  } finally {
+    console.error = originalConsoleError;
+  }
+});
+
+test("deferred render failure uses custom errorFallback when provided", async () => {
+  const { promise: loaderGate, release } = gate();
+  const root: LayoutNode = {
+    id: "root", directory: "/app", file: "/app/layout.tsx",
+    render: ({ children }) => `<html><body>${children}</body></html>` as JSX.Element,
+  };
+  const page: PageNode = {
+    id: "root/page", directory: "/app", file: "/app/page.tsx",
+    load: async () => { await loaderGate; throw new Error("boom"); },
+    render: () => `<main>page</main>` as JSX.Element,
+    renderLoading: () => `<main>SKELETON</main>` as JSX.Element,
+  };
+  const route: Route = { id: "/", pattern: "/", segments: [], layouts: [root], page, pageFile: page.file, renderPage: page.render };
+  const match: RouteMatch = { route, pathname: "/", params: {} };
+
+  const rendered = await renderFullMatch(match, new Request("http://localhost/"), {
+    errorFallback: "<p>Une erreur est survenue.</p>",
+  });
+  if (rendered.kind !== "stream") throw new Error("expected streaming render");
+
+  const reader = rendered.stream.getReader();
+  const decoder = new TextDecoder();
+  await reader.read(); // consume skeleton chunk
+
+  release();
+  let rest = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (value) rest += decoder.decode(value, { stream: true });
+    if (done) break;
+  }
+  rest += decoder.decode();
+  expect(rest).toContain("Une erreur est survenue.");
+  expect(rest).not.toContain("Something went wrong.");
 });

@@ -277,7 +277,7 @@ export async function createBrandy(options: BrandyOptions): Promise<BrandyApplic
       headers.set(RESWAP_HEADER, "innerHTML");
       if (rendered.kind === "stream") {
         headers.set(STREAM_HEADER, "1");
-        return new Response(appendToStream(rendered.stream, modalClear), { status: 200, headers });
+        return new Response(appendToStream(rendered.stream, modalClear), { status: rendered.status, headers });
       }
       return new Response(`${rendered.html}${metadataSwap(rendered.metadata)}${modalClear}`, { status: rendered.status, headers });
     }
@@ -315,7 +315,7 @@ export async function createBrandy(options: BrandyOptions): Promise<BrandyApplic
         headers.set("vary", `${PARTIAL_HEADER}, ${CURRENT_URL_HEADER}`);
         if (rendered.kind === "stream") {
           headers.set(STREAM_HEADER, "1");
-          return new Response(rendered.stream, { status: 200, headers });
+          return new Response(rendered.stream, { status: rendered.status, headers });
         }
         return new Response(`${rendered.html}${metadataSwap(rendered.metadata, "merge")}`, { status: rendered.status, headers });
       }
@@ -336,7 +336,7 @@ export async function createBrandy(options: BrandyOptions): Promise<BrandyApplic
       headers.set("vary", `${PARTIAL_HEADER}, ${CURRENT_URL_HEADER}`);
       if (rendered.kind === "stream") {
         headers.set(STREAM_HEADER, "1");
-        return new Response(appendToStream(rendered.stream, modalClear), { status: targetResult.missing ? 404 : 200, headers });
+        return new Response(appendToStream(rendered.stream, modalClear), { status: targetResult.missing ? 404 : rendered.status, headers });
       }
       return new Response(`${rendered.html}${metadataSwap(rendered.metadata)}${modalClear}`, { status: targetResult.missing ? 404 : rendered.status, headers });
     }
@@ -356,7 +356,7 @@ export async function createBrandy(options: BrandyOptions): Promise<BrandyApplic
         if (hasInterceptedRoutes) document = injectModalOutlet(document);
         return document;
       });
-      return new Response(stream, { status: targetResult.missing ? 404 : 200, headers });
+      return new Response(stream, { status: targetResult.missing ? 404 : rendered.status, headers });
     }
     let document = injectClientRuntime(injectMetadata(rendered.html, rendered.metadata), clientPath);
     if (stylesheetPath) document = injectStylesheet(document, stylesheetPath);

@@ -146,7 +146,27 @@ function splitDocumentClosing(document: string): { shell: string; closing: strin
     : { shell: document, closing: "" };
 }
 
-function renderPipelineStreaming(
+/** Machine-readable marker emitted as the sole first chunk when the ancestor phase fails before
+ *  anything could be flushed.  Clients and tests can detect this to distinguish a broken skeleton
+ *  from a normal (possibly empty) first chunk. */
+export const STREAM_ERROR_MARKER = "<!--brandy:stream-error-->";
+
+function logStreamError(label: string, error: unknown, dev: boolean): void {
+  if (dev) {
+    console.error(`[brandy] streaming render error (${label}):`, error);
+  } else {
+    // Structured log for production log aggregators.
+    console.error(JSON.stringify({
+      level: "error",
+      source: "brandy",
+      phase: label,
+      message: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    }));
+  }
+}
+
+async function renderPipelineStreaming(
   match: RouteMatch,
   request: Request,
   layouts: LayoutNode[],
@@ -155,53 +175,79 @@ function renderPipelineStreaming(
   options: RenderOptions,
   sharedStatic: Metadata[],
   withMemoization: LoaderMemoizationScope,
-): RenderedRoute {
+): Promise<RenderedRoute> {
   const nodes: RenderNode[] = [...layouts, match.route.page];
   const streamNode = nodes[streamIndex]!;
   const ancestorLayouts = layouts.slice(0, Math.min(streamIndex, layouts.length));
   const deeperLayouts = layouts.slice(Math.min(streamIndex, layouts.length));
   const anchorId = streamId(streamNode.id);
   const encoder = new TextEncoder();
+  const dev = options.dev === true;
+  const errorFallback = options.errorFallback ?? "<p>Something went wrong.</p>";
+
+  // ── Ancestor phase (runs eagerly so we know the HTTP status before any bytes commit) ──
+  let skeletonChunk: string;
+  let documentClosing = "";
+  let ancestorMetadata: Metadata = {};
+  let ancestorFailed = false;
+  try {
+    const loadedAncestors = await withMemoization(() => loadNodes(match, request, ancestorLayouts));
+    ancestorMetadata = loadedAncestors.metadata;
+    const skeletonInner = `<div id="${escapeAttribute(anchorId)}" data-brandy-stream>${String(streamNode.renderLoading!())}</div>`;
+    let skeleton = await wrap(skeletonInner, ancestorLayouts, loadedAncestors, request);
+    if (mode === "document") {
+      skeleton = injectMetadata(skeleton, mergeMetadata([...sharedStatic, ancestorMetadata]));
+      const framed = splitDocumentClosing(skeleton);
+      skeleton = framed.shell;
+      documentClosing = framed.closing;
+    }
+    skeletonChunk = skeleton;
+  } catch (error) {
+    // Ancestor layouts failed before any bytes were committed — headers have not been sent yet,
+    // so we can report a real 500 status.  Emit the machine-readable error marker as the sole
+    // first chunk so clients/tests can detect the failure mode.
+    logStreamError("ancestor", error, dev);
+    ancestorFailed = true;
+    skeletonChunk = STREAM_ERROR_MARKER;
+  }
+
+  const status: 200 | 500 = ancestorFailed ? 500 : 200;
+
+  // ── Deferred phase (runs inside the stream so the skeleton flushes first) ──
+  const capturedAncestorMetadata = ancestorMetadata;
+  const capturedDocumentClosing = documentClosing;
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
-      let ancestorMetadata: Metadata = {};
-      let documentClosing = "";
-      try {
-        const loadedAncestors = await withMemoization(() => loadNodes(match, request, ancestorLayouts));
-        ancestorMetadata = loadedAncestors.metadata;
-        const skeletonInner = `<div id="${escapeAttribute(anchorId)}" data-brandy-stream>${String(streamNode.renderLoading!())}</div>`;
-        let skeleton = await wrap(skeletonInner, ancestorLayouts, loadedAncestors, request);
-        if (mode === "document") {
-          skeleton = injectMetadata(skeleton, mergeMetadata([...sharedStatic, ancestorMetadata]));
-          const framed = splitDocumentClosing(skeleton);
-          skeleton = framed.shell;
-          documentClosing = framed.closing;
-        }
-        controller.enqueue(encoder.encode(skeleton));
-      } catch {
-        // Ancestor layouts failed before anything could stream — nothing useful to flush;
-        // the trailing chunk below still attempts to report something into the anchor-less void.
-      }
+      controller.enqueue(encoder.encode(skeletonChunk));
       controller.enqueue(encoder.encode(STREAM_BOUNDARY));
 
+      if (ancestorFailed) {
+        // No anchor exists in the DOM — skip the swap script entirely.
+        controller.close();
+        return;
+      }
+
       let html: string;
-      let metadata = mergeMetadata([...sharedStatic, ancestorMetadata]);
+      let metadata = mergeMetadata([...sharedStatic, capturedAncestorMetadata]);
       try {
         const deeper = await withMemoization(() => renderPipelineCore(match, request, deeperLayouts, options));
         html = deeper.html;
-        metadata = mergeMetadata([...sharedStatic, ancestorMetadata, deeper.metadata]);
-      } catch {
-        html = "<p>Something went wrong.</p>";
+        metadata = mergeMetadata([...sharedStatic, capturedAncestorMetadata, deeper.metadata]);
+      } catch (error) {
+        // Deeper render failed after the skeleton was already shipped — HTTP headers already committed.
+        // Log the error and emit the configurable fallback so the slot is never left empty.
+        logStreamError("deferred", error, dev);
+        html = errorFallback;
       }
       const tail = mode === "document"
-        ? inlineSwap(anchorId, html) + inlineMetaSwap(metadata) + documentClosing
+        ? inlineSwap(anchorId, html) + inlineMetaSwap(metadata) + capturedDocumentClosing
         : streamSwap(anchorId, html) + metadataSwap(metadata, options.metadataMode);
       controller.enqueue(encoder.encode(tail));
       controller.close();
     },
   });
 
-  return { kind: "stream", stream, status: 200 };
+  return { kind: "stream", stream, status };
 }
 
 async function renderPipeline(
@@ -218,7 +264,7 @@ async function renderPipeline(
   // streaming it would mean no <html> shell is available to flush as the first chunk.
   const minIndex = mode === "document" ? 1 : 0;
   const streamIndex = findStreamingIndex(nodes, minIndex);
-  if (streamIndex >= 0) return renderPipelineStreaming(match, request, layouts, streamIndex, mode, options, sharedStatic, withMemoization);
+  if (streamIndex >= 0) return await renderPipelineStreaming(match, request, layouts, streamIndex, mode, options, sharedStatic, withMemoization);
   const core = await withMemoization(() => renderPipelineCore(match, request, layouts, options));
   return { kind: "sync", html: core.html, status: core.status, metadata: mergeMetadata([...sharedStatic, core.metadata]) };
 }
