@@ -390,3 +390,13 @@ test("trusted origins must be absolute HTTP(S) origins", async () => {
   await expect(createBrandy({ appDir, trustedOrigins: ["https://example.com/path"] })).rejects.toThrow("Invalid trusted origin");
   await expect(createBrandy({ appDir, trustedOrigins: ["ftp://example.com"] })).rejects.toThrow("Invalid trusted origin");
 });
+
+test("cold-load full-document responses carry Vary on both brandy navigation headers", async () => {
+  // A CDN must not serve a cached full document to a fragment request.  Emitting
+  // Vary: x-brandy-navigation, x-brandy-current-url on the full-document path
+  // ensures the cache key differs between cold-load and fragment requests.
+  const app = await createBrandy({ appDir });
+  const response = await app.handle(new Request("http://localhost/dashboard/settings"));
+  expect(response.headers.get("vary")).toContain("x-brandy-navigation");
+  expect(response.headers.get("vary")).toContain("x-brandy-current-url");
+});
