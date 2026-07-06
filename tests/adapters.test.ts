@@ -29,6 +29,7 @@ async function fixture(pageExport = "export const prerender = true;") {
   `);
   await mkdir(join(root, "public"), { recursive: true });
   await writeFile(join(root, "public/hello.txt"), "hello");
+  await writeFile(join(root, "public/hello.a1b2c3d4.txt"), "fingerprinted hello");
   const config = await loadConfig(root);
   config.styles = false;
   return { root, config };
@@ -51,7 +52,7 @@ test("adapter factories expose stable runtime descriptors", () => {
   expect(vercel({ runtime: "edge" }).runtime).toBe("vercel-edge");
 });
 
-test("Bun output starts as a standalone server and serves static framework assets", async () => {
+test("Bun output serves framework and public assets with appropriate cache policies", async () => {
   const { root, config } = await fixture();
   const output = join(root, "bun");
   const port = 32_000 + Math.floor(Math.random() * 1_000);
@@ -71,6 +72,12 @@ test("Bun output starts as a standalone server and serves static framework asset
     const metadata = JSON.parse(await readFile(join(output, "build.json"), "utf8"));
     const runtime = await fetch(`http://localhost:${port}${metadata.assets.runtime}`);
     expect(runtime.headers.get("cache-control")).toBe("public, max-age=31536000, immutable");
+    const publicAsset = await fetch(`http://localhost:${port}/hello.txt`);
+    expect(await publicAsset.text()).toBe("hello");
+    expect(publicAsset.headers.get("cache-control")).toBe("public, max-age=3600");
+    const fingerprintedAsset = await fetch(`http://localhost:${port}/hello.a1b2c3d4.txt`);
+    expect(await fingerprintedAsset.text()).toBe("fingerprinted hello");
+    expect(fingerprintedAsset.headers.get("cache-control")).toBe("public, max-age=31536000, immutable");
   } finally {
     child.kill();
     await child.exited;

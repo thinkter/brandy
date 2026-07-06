@@ -43,6 +43,10 @@ function contentHash(source: string): string {
   return createHash("sha256").update(source).digest("hex").slice(0, 12);
 }
 
+function isFingerprintedPublicAsset(path: string): boolean {
+  return /(?:^|[._-])[a-f0-9]{8,64}(?=\.[^/]+$)/i.test(path);
+}
+
 async function nearest(directory: string, appDir: string, names: string[]): Promise<string | undefined> {
   let current = directory;
   while (current.startsWith(appDir)) {
@@ -268,6 +272,7 @@ const config=${config.configFile ? `${imported(config.configFile)}.default ?? {}
   const appOptions = `manifest,clientPath:${JSON.stringify(clientPath)},stylesheetPath:${JSON.stringify(stylesheetPath)},alpineChunkPath:${JSON.stringify(alpineChunkPath)},trustedOrigins:config.trustedOrigins,setup:config.setup,dev:false,prerenderSnapshot:${JSON.stringify(prerenderSnapshot)},immutablePrerender:${adapterRejectsMutableCache(config.adapter.runtime)}`;
   const frameworkPaths = [clientPath, stylesheetPath, alpineChunkPath].filter((path): path is string => Boolean(path));
   const publicAssetPaths = await publicPaths(config.publicDir);
+  const fingerprintedPublicAssetPaths = publicAssetPaths.filter(isFingerprintedPublicAsset);
   const builtAt = Date.now();
   const sourceMtime = await latestMtime([config.appDir, config.styles, config.publicDir, config.configFile]);
   const metadata = { version: 2, adapter: config.adapter.runtime, sourceMtime, builtAt, assets: { runtime: clientPath, stylesheet: stylesheetPath, alpine: alpineChunkPath } };
@@ -281,8 +286,9 @@ const config=${config.configFile ? `${imported(config.configFile)}.default ?? {}
 const app=await createBrandy({${appOptions}});
 const staticRoutes={};
 const staticAssets=new Set(${JSON.stringify([...publicAssetPaths, ...frameworkPaths])});
+const immutablePublicAssets=new Set(${JSON.stringify(fingerprintedPublicAssetPaths)});
 const publicRoot=${JSON.stringify(staticDir)};
-const server=Bun.serve({port:Number(process.env.PORT)||${config.port},hostname:process.env.HOST||${JSON.stringify(config.host)},async fetch(request){const url=new URL(request.url);if((request.method==="GET"||request.method==="HEAD")&&request.headers.get("x-brandy-navigation")!=="1"){const path=staticRoutes[url.pathname]??(staticAssets.has(url.pathname)?url.pathname:undefined);if(path){const file=Bun.file(publicRoot+path);if(await file.exists()){const headers=path.startsWith("/_brandy/")?{"cache-control":"public, max-age=31536000, immutable"}:undefined;return new Response(request.method==="HEAD"?null:file,{headers});}}}return app.handle(request);}});
+const server=Bun.serve({port:Number(process.env.PORT)||${config.port},hostname:process.env.HOST||${JSON.stringify(config.host)},async fetch(request){const url=new URL(request.url);if((request.method==="GET"||request.method==="HEAD")&&request.headers.get("x-brandy-navigation")!=="1"){const path=staticRoutes[url.pathname]??(staticAssets.has(url.pathname)?url.pathname:undefined);if(path){const file=Bun.file(publicRoot+path);if(await file.exists()){const immutable=path.startsWith("/_brandy/")||immutablePublicAssets.has(path);const headers={"cache-control":immutable?"public, max-age=31536000, immutable":"public, max-age=3600"};return new Response(request.method==="HEAD"?null:file,{headers});}}}return app.handle(request);}});
 console.log(\`Brandy listening at \${server.url}\`);
 `;
     await bundleSource(source, join(output, "server.js"), "bun");
