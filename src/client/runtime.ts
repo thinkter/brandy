@@ -16,6 +16,8 @@ const STREAM = "x-brandy-stream";
 const NO_INTERCEPT = "x-brandy-no-intercept";
 const STREAM_BOUNDARY = "<!--brandy:stream-boundary-->";
 const HOVER_DELAY = 100;
+const PREFETCH_TTL_MS = 30_000;
+const PREFETCH_MAX_SIZE = 50;
 
 let renderedURL = location.pathname + location.search;
 
@@ -31,6 +33,8 @@ interface FragmentResult {
 interface PrefetchEntry {
   promise: Promise<PrefetchedResult>;
   currentURL: string;
+  /** Epoch ms when this entry was added — used for TTL eviction. */
+  addedAt: number;
 }
 
 type PrefetchedResult =
@@ -236,7 +240,8 @@ async function applyStreamedFragment(response: Response, url: URL, historyMode: 
 async function navigate(url: URL, init?: RequestInit, historyMode: "push" | "none" = "push"): Promise<void> {
   const key = cacheKey(url);
   const cached = !init ? prefetchCache.get(key) : undefined;
-  if (cached && cached.currentURL === renderedURL) {
+  const fresh = cached && Date.now() - cached.addedAt < PREFETCH_TTL_MS;
+  if (fresh && cached.currentURL === renderedURL) {
     prefetchCache.delete(key);
     try {
       const prefetched = await cached.promise;
@@ -247,6 +252,7 @@ async function navigate(url: URL, init?: RequestInit, historyMode: "push" | "non
     }
     return;
   }
+  if (cached && !fresh) prefetchCache.delete(key);
 
   let response: Response;
   try {
@@ -287,9 +293,15 @@ function eligibleForPrefetch(link: HTMLAnchorElement): URL | null {
 
 function prefetch(url: URL): void {
   const key = cacheKey(url);
-  if (prefetchCache.has(key)) return;
+  const existing = prefetchCache.get(key);
+  if (existing && Date.now() - existing.addedAt < PREFETCH_TTL_MS) return;
+  if (existing) prefetchCache.delete(key);
+  if (prefetchCache.size >= PREFETCH_MAX_SIZE) {
+    // Evict the oldest entry (Maps iterate in insertion order).
+    prefetchCache.delete(prefetchCache.keys().next().value!);
+  }
   const promise = fetchPrefetch(url);
-  prefetchCache.set(key, { promise, currentURL: renderedURL });
+  prefetchCache.set(key, { promise, currentURL: renderedURL, addedAt: Date.now() });
   promise.catch(() => prefetchCache.delete(key));
 }
 

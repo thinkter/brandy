@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { diffRoutes } from "brandy";
+import { diffRoutes, renderFullMatch, type LayoutNode, type PageNode, type RequestContext, type Route, type RouteMatch } from "brandy";
 import { buildManifest, createDevelopmentApp as createBrandy } from "brandy/build";
 
 const appDir = new URL("../example/app", import.meta.url).pathname;
@@ -27,6 +27,42 @@ test("a loader can read and round-trip the prefetch header", async () => {
     headers: { ...headers, "x-brandy-prefetch": "1" },
   }));
   expect(await prefetched.text()).toContain("prefetch request");
+});
+
+test("isPrefetch is true in loader context when x-brandy-prefetch header is present", async () => {
+  let capturedContext: RequestContext | undefined;
+  const root: LayoutNode = {
+    id: "root", directory: "/app", file: "/app/layout.tsx",
+    render: ({ children }) => `<html><body>${children}</body></html>` as JSX.Element,
+  };
+  const page: PageNode = {
+    id: "root/page", directory: "/app", file: "/app/page.tsx",
+    load: (ctx) => { capturedContext = ctx; return null; },
+    render: () => `<main>ok</main>` as JSX.Element,
+  };
+  const route: Route = { id: "/", pattern: "/", segments: [], layouts: [root], page, pageFile: page.file, renderPage: page.render };
+  const match: RouteMatch = { route, pathname: "/", params: {} };
+
+  await renderFullMatch(match, new Request("http://localhost/", { headers: { "x-brandy-prefetch": "1" } }));
+  expect(capturedContext?.isPrefetch).toBe(true);
+});
+
+test("isPrefetch is false in loader context when x-brandy-prefetch header is absent", async () => {
+  let capturedContext: RequestContext | undefined;
+  const root: LayoutNode = {
+    id: "root", directory: "/app", file: "/app/layout.tsx",
+    render: ({ children }) => `<html><body>${children}</body></html>` as JSX.Element,
+  };
+  const page: PageNode = {
+    id: "root/page", directory: "/app", file: "/app/page.tsx",
+    load: (ctx) => { capturedContext = ctx; return null; },
+    render: () => `<main>ok</main>` as JSX.Element,
+  };
+  const route: Route = { id: "/", pattern: "/", segments: [], layouts: [root], page, pageFile: page.file, renderPage: page.render };
+  const match: RouteMatch = { route, pathname: "/", params: {} };
+
+  await renderFullMatch(match, new Request("http://localhost/"));
+  expect(capturedContext?.isPrefetch).toBe(false);
 });
 
 test("the same target URL diffs to different boundaries depending on the current URL", async () => {

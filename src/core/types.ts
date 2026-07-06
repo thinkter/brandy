@@ -5,6 +5,8 @@ export interface RequestContext {
   params: Params;
   request: Request;
   url: URL;
+  /** True when the request was issued as a hover-prefetch rather than a real navigation. */
+  isPrefetch: boolean;
 }
 
 export interface ErrorContext extends RequestContext {
