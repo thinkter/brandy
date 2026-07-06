@@ -360,4 +360,5 @@ test("compiled client runtime understands the streaming wire format", async () =
   expect(source).toContain("brandy:stream-boundary");
   expect(source).toContain("data-brandy-stream-target");
   expect(source).toContain("brandyStreamTarget");
+  expect(source).toContain("cannot intercept a GET form containing files");
 });

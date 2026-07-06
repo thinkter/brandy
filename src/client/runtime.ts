@@ -1,3 +1,5 @@
+import { getFormSearchParams } from "./forms.ts";
+
 declare const __BRANDY_ALPINE_CHUNK__: string;
 declare const __BRANDY_DEV__: boolean;
 
@@ -356,9 +358,7 @@ document.addEventListener("submit", (event) => {
   const method = form.method.toUpperCase();
   const data = new FormData(form, event.submitter as HTMLElement | null ?? undefined);
   if (method === "GET") {
-    const query = new URLSearchParams();
-    for (const [key, value] of data) if (typeof value === "string") query.append(key, value);
-    url.search = query.toString();
+    url.search = getFormSearchParams(data).toString();
     void navigate(url);
   } else {
     void navigate(url, { method, body: data }, "none");
