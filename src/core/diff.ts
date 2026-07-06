@@ -1,6 +1,14 @@
 import { normalizePathname } from "./path.ts";
 import type { Route, RouteDiff, RouteManifest, RouteMatch } from "./types.ts";
 
+export class RouteNotFoundError extends Error {
+  readonly name = "RouteNotFoundError";
+
+  constructor(readonly pathname: string) {
+    super(`No route matches ${pathname}`);
+  }
+}
+
 function matches(route: Route, pathname: string): boolean {
   const parts = pathname === "/" ? [] : pathname.slice(1).split("/");
   if (parts.length !== route.segments.length) return false;
@@ -20,7 +28,7 @@ function paramsFor(route: Route, pathname: string): Record<string, string> {
 export function matchRoute(manifest: RouteManifest, url: string): RouteMatch {
   const pathname = normalizePathname(url);
   const route = manifest.routes.find((candidate) => matches(candidate, pathname));
-  if (!route) throw new Error(`No route matches ${pathname}`);
+  if (!route) throw new RouteNotFoundError(pathname);
   return { route, pathname, params: paramsFor(route, pathname) };
 }
 

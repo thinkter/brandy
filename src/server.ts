@@ -2,7 +2,7 @@ import type {} from "./alpine-jsx.d.ts";
 import { applyRenderSnapshot, createMemoryRenderCache, renderFragmentMatchCached, renderFragmentMatchFresh, renderFullMatchCached } from "./core/cache.ts";
 import type { RenderCache, RenderCacheEntry } from "./core/cache.ts";
 import { isRevalidation } from "./core/control.ts";
-import { matchRoute } from "./core/diff.ts";
+import { matchRoute, RouteNotFoundError } from "./core/diff.ts";
 import { hasElementAttribute, insertBeforeClosingTag } from "./core/html.ts";
 import { escapeAttribute, normalizePathname, slotId } from "./core/path.ts";
 import { injectMetadata, metadataSwap, renderFragmentMatch, streamSwap } from "./core/render.ts";
@@ -131,7 +131,7 @@ function cacheNotFoundRoute(manifest: RouteManifest): Route {
 function resolveMatch(manifest: RouteManifest, pathname: string): { match: RouteMatch; missing: boolean } {
   try { return { match: matchRoute(manifest, pathname), missing: false }; }
   catch (error) {
-    if (!(error instanceof Error) || !error.message.startsWith("No route matches")) throw error;
+    if (!(error instanceof RouteNotFoundError)) throw error;
     return { match: { route: manifest.notFoundRoute!, pathname, params: {} }, missing: true };
   }
 }

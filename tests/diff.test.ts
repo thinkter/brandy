@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Html } from "@elysiajs/html";
-import { diffRoutes, normalizePathname, slotId, type LayoutNode, type Route, type RouteManifest } from "brandy";
+import { diffRoutes, matchRoute, normalizePathname, RouteNotFoundError, slotId, type LayoutNode, type Route, type RouteManifest } from "brandy";
 
 const renderLayout = ({ children }: { children: JSX.Element }) => children;
 const root: LayoutNode = { id: "root", directory: "app", file: "app/layout.tsx", render: renderLayout };
@@ -64,7 +64,18 @@ describe("diffRoutes", () => {
   });
 
   test("throws for unknown routes", () => {
+    expect(() => diffRoutes(manifest, "/", "/missing")).toThrow(RouteNotFoundError);
     expect(() => diffRoutes(manifest, "/", "/missing")).toThrow("No route matches /missing");
+  });
+
+  test("route-not-found errors retain the normalized pathname", () => {
+    try {
+      matchRoute(manifest, "https://site.test/missing/?query=ignored");
+      throw new Error("Expected matchRoute to throw");
+    } catch (error) {
+      expect(error).toBeInstanceOf(RouteNotFoundError);
+      expect((error as RouteNotFoundError).pathname).toBe("/missing");
+    }
   });
 });
 
