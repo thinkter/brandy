@@ -170,4 +170,9 @@ export interface StreamRenderedRoute {
   status: 200 | 500;
 }
 
-export type RenderedRoute = SyncRenderedRoute | StreamRenderedRoute;
+export interface RedirectRenderedRoute {
+  kind: "redirect";
+  response: Response;
+}
+
+export type RenderedRoute = SyncRenderedRoute | StreamRenderedRoute | RedirectRenderedRoute;

@@ -17,6 +17,9 @@ export const REFRESH_BOUNDARY_HEADER = "x-brandy-refresh-boundary";
 export const PREFETCH_HEADER = "x-brandy-prefetch";
 export const STREAM_HEADER = "x-brandy-stream";
 export const NO_INTERCEPT_HEADER = "x-brandy-no-intercept";
+/** Sent on fragment-navigation responses when a loader called redirect(). The value is the
+ * destination URL; the client runtime performs location.assign() to follow it as a full navigation. */
+export const REDIRECT_HEADER = "x-brandy-redirect";
 /** Reserved element id for intercepting-route modals. Brandy injects this div into the document
  * automatically — apps never declare it, matching "the developer never hand-writes a target". */
 export const MODAL_OUTLET_ID = "brandy-modal-outlet";
@@ -273,6 +276,7 @@ export async function createBrandy(options: BrandyOptions): Promise<BrandyApplic
     if (request.headers.get(PARTIAL_HEADER) === "1") {
       const diff = diffLayoutChains(current, target);
       const rendered = await renderFragmentMatchFresh(diff, targetRequest, renderOptions, renderCache);
+      if (rendered.kind === "redirect") return new Response(null, { status: 302, headers: { [REDIRECT_HEADER]: rendered.response.headers.get("location") ?? "/" } });
       headers.set(RETARGET_HEADER, `#${slotId(diff.boundary.id)}`);
       headers.set(RESWAP_HEADER, "innerHTML");
       if (rendered.kind === "stream") {
@@ -309,6 +313,7 @@ export async function createBrandy(options: BrandyOptions): Promise<BrandyApplic
         const syntheticTarget: RouteMatch = { route: syntheticRoute, pathname: targetResult.match.pathname, params: targetResult.match.params };
         const diff: RouteDiff = { current, target: syntheticTarget, boundary: current.route.layouts[0]!, chainToRender: [] };
         const rendered = await renderFragmentMatch(diff, request, { ...renderOptions, metadataMode: "merge" });
+        if (rendered.kind === "redirect") return new Response(null, { status: 302, headers: { [REDIRECT_HEADER]: rendered.response.headers.get("location") ?? "/" } });
         headers.set(RETARGET_HEADER, `#${MODAL_OUTLET_ID}`);
         headers.set(RESWAP_HEADER, "innerHTML");
         headers.set(TARGET_URL_HEADER, targetPath);
@@ -330,6 +335,7 @@ export async function createBrandy(options: BrandyOptions): Promise<BrandyApplic
         }
       }
       const rendered = await renderFragmentMatchCached(diff, request, renderOptions, renderCache);
+      if (rendered.kind === "redirect") return new Response(null, { status: 302, headers: { [REDIRECT_HEADER]: rendered.response.headers.get("location") ?? "/" } });
       headers.set(RETARGET_HEADER, `#${slotId(diff.boundary.id)}`);
       headers.set(RESWAP_HEADER, "innerHTML");
       headers.set(TARGET_URL_HEADER, targetPath);
@@ -346,6 +352,7 @@ export async function createBrandy(options: BrandyOptions): Promise<BrandyApplic
     // must apply unconditionally to both response types.
     headers.set("vary", `${PARTIAL_HEADER}, ${CURRENT_URL_HEADER}`);
     const rendered = await renderFullMatchCached(targetResult.match, request, renderOptions, renderCache);
+    if (rendered.kind === "redirect") return rendered.response;
     if (rendered.kind === "stream") {
       headers.set(STREAM_HEADER, "1");
       const stream = injectIntoFirstChunk(rendered.stream, (html) => {

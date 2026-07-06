@@ -157,6 +157,50 @@ export function load({ params }: { params: Record<string, string> }) {
 }
 ```
 
+## Redirects and authentication
+
+Call `redirect(url)` inside any `load` function to send the browser to another URL. The second argument is the HTTP status code (default `302`):
+
+```tsx
+import { redirect } from "brandy"
+import type { RequestContext } from "brandy"
+
+export async function load({ request }: RequestContext) {
+  const session = await getSession(request)
+  if (!session) redirect("/login")
+  return session.user
+}
+```
+
+On cold (full-page) loads the server responds with the redirect status and a `Location` header, so the browser follows it before any HTML is rendered. On client-side soft-navigation the runtime receives a `x-brandy-redirect` response header and calls `location.assign()`, replacing the current page at the destination URL.
+
+`redirect()` bypasses error and not-found boundaries — it always propagates out of loaders without invoking any `error.tsx` or `not-found.tsx`.
+
+**Auth pattern for protected areas.** The idiomatic way to protect a subtree is a redirect in the nearest layout loader. A `dashboard/layout.tsx` that redirects to `/login` when unauthenticated covers every route under `dashboard/` without repeating the guard in each page:
+
+```tsx
+// app/dashboard/layout.tsx
+import { redirect } from "brandy"
+import type { LayoutRenderContext, RequestContext } from "brandy"
+
+export async function load({ request }: RequestContext) {
+  const session = await getSession(request)
+  if (!session) redirect("/login")
+  return session.user
+}
+
+export default function DashboardLayout({ children, data }: LayoutRenderContext<User>) {
+  return (
+    <div>
+      <nav>Welcome, {data.name}</nav>
+      {children}
+    </div>
+  )
+}
+```
+
+Brandy deliberately has no middleware layer. Loaders already have access to `request`, `params`, and `url`, and a layout loader covers every route in its subtree, which is the same scope middleware would. Keeping auth in loaders means the same TypeScript, the same error boundaries, and the same data-fetching primitives apply everywhere — no separate execution context to reason about.
+
 ## Prerendering
 
 A page can export `prerender = true` to cache its rendered output until an action revalidates it, or `revalidate = 60` to recompute it at most every 60 seconds. Both complete documents and soft-navigation fragments are cached, and statically-patterned routes are warmed at build time.

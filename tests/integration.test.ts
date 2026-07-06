@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createBrandy as createRuntime, revalidate, type ServerAction } from "brandy";
+import { createBrandy as createRuntime, redirect, revalidate, type LayoutNode, type PageNode, type Route, type ServerAction } from "brandy";
 import { buildManifest, createDevelopmentApp as createBrandy } from "brandy/build";
 
 const appDir = new URL("../example/app", import.meta.url).pathname;
@@ -450,4 +450,51 @@ test("action url is the actual request URL and preserves the query string", asyn
   expect(capturedUrl?.pathname).toBe(path);
   expect(capturedUrl?.searchParams.get("ref")).toBe("newsletter");
   expect(capturedUrl?.href).toBe(`http://localhost${path}?ref=newsletter`);
+});
+
+test("redirect() in a layout loader issues a proper HTTP redirect on cold load", async () => {
+  const manifest = await buildManifest(appDir);
+  // Patch the root layout to redirect unauthenticated users — the canonical auth pattern.
+  const root = manifest.routes[0]!.layouts[0]!;
+  const originalLoad = root.load;
+  root.load = async (ctx) => {
+    // Simulate: if a request header signals "unauthenticated", redirect to /login.
+    if (ctx.request.headers.get("x-test-unauthed") === "1") redirect("/login");
+    return originalLoad?.(ctx);
+  };
+  const app = await createRuntime({ manifest });
+
+  const authed = await app.handle(new Request("http://localhost/dashboard/settings"));
+  expect(authed.status).toBe(200);
+
+  const unauthed = await app.handle(new Request("http://localhost/dashboard/settings", {
+    headers: { "x-test-unauthed": "1" },
+  }));
+  expect(unauthed.status).toBe(302);
+  expect(unauthed.headers.get("location")).toBe("/login");
+});
+
+test("redirect() in a layout loader sends x-brandy-redirect header on fragment navigation", async () => {
+  const manifest = await buildManifest(appDir);
+  // Patch the dashboard layout (which IS part of chainToRender when navigating
+  // from /about to /dashboard/settings) to redirect unauthenticated users.
+  const dashboardRoute = manifest.routes.find((r) => r.segments.includes("dashboard") && !r.segments.includes("settings"));
+  const dashboardLayout = dashboardRoute?.layouts.find((l) => l.id === "dashboard");
+  if (!dashboardLayout) throw new Error("Could not find dashboard layout");
+  const originalLoad = dashboardLayout.load;
+  dashboardLayout.load = async (ctx) => {
+    if (ctx.request.headers.get("x-test-unauthed") === "1") redirect("/login");
+    return originalLoad?.(ctx);
+  };
+  const app = await createRuntime({ manifest });
+
+  const response = await app.handle(new Request("http://localhost/dashboard/settings", {
+    headers: {
+      "x-brandy-navigation": "1",
+      "x-brandy-current-url": "/about",
+      "x-test-unauthed": "1",
+    },
+  }));
+  expect(response.status).toBe(302);
+  expect(response.headers.get("x-brandy-redirect")).toBe("/login");
 });

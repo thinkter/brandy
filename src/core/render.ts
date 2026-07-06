@@ -1,10 +1,10 @@
-import { NotFoundError } from "./control.ts";
+import { NotFoundError, RedirectError } from "./control.ts";
 import { findClosingTag, insertBeforeClosingTag } from "./html.ts";
 import { createLoaderMemoizationScope, type LoaderMemoizationScope } from "./memo.ts";
 import { escapeAttribute, slotId, streamId } from "./path.ts";
 import type {
   LayoutNode, LoadedRoute, Metadata, MetadataExport, PageNode, RenderContext,
-  RenderedRoute, RenderOptions, RequestContext, Route, RouteDiff, RouteMatch, SyncRenderedRoute,
+  RedirectRenderedRoute, RenderedRoute, RenderOptions, RequestContext, Route, RouteDiff, RouteMatch, SyncRenderedRoute,
 } from "./types.ts";
 
 type RenderNode = LayoutNode | PageNode;
@@ -88,6 +88,7 @@ async function renderPipelineCore(match: RouteMatch, request: Request, layouts: 
     }
     return { html: await wrap(page, layouts, loaded, request), metadata: loaded.metadata, status: 200 };
   } catch (error) {
+    if (error instanceof RedirectError) throw error;
     const failed = (error as { brandyNode?: RenderNode }).brandyNode;
     const index = Math.max(0, failed ? nodes.indexOf(failed) : nodes.length - 1);
     if (error instanceof NotFoundError) {
@@ -203,6 +204,9 @@ async function renderPipelineStreaming(
     }
     skeletonChunk = skeleton;
   } catch (error) {
+    // The ancestor phase runs before any bytes commit, so a loader redirect here can still
+    // become a real HTTP redirect — propagate it to renderPipeline instead of emitting a script.
+    if (error instanceof RedirectError) throw error;
     // Ancestor layouts failed before any bytes were committed — headers have not been sent yet,
     // so we can report a real 500 status.  Emit the machine-readable error marker as the sole
     // first chunk so clients/tests can detect the failure mode.
@@ -234,6 +238,20 @@ async function renderPipelineStreaming(
         html = deeper.html;
         metadata = mergeMetadata([...sharedStatic, capturedAncestorMetadata, deeper.metadata]);
       } catch (error) {
+        if (error instanceof RedirectError) {
+          // A deferred loader redirected after the skeleton shipped — headers are already
+          // committed, so emit a client-side redirect instruction instead of an HTTP redirect.
+          const location = error.response.headers.get("location") ?? "/";
+          const instruction = mode === "document"
+            ? inlineScript(`location.replace(${JSON.stringify(location)})`)
+            : inlineScript(`window.__brandyRedirect=${JSON.stringify(location)}`);
+          const tail = mode === "document"
+            ? instruction + capturedDocumentClosing
+            : streamSwap(anchorId, instruction) + metadataSwap(metadata, options.metadataMode);
+          controller.enqueue(encoder.encode(tail));
+          controller.close();
+          return;
+        }
         // Deeper render failed after the skeleton was already shipped — HTTP headers already committed.
         // Log the error and emit the configurable fallback so the slot is never left empty.
         logStreamError("deferred", error, dev);
@@ -264,9 +282,14 @@ async function renderPipeline(
   // streaming it would mean no <html> shell is available to flush as the first chunk.
   const minIndex = mode === "document" ? 1 : 0;
   const streamIndex = findStreamingIndex(nodes, minIndex);
-  if (streamIndex >= 0) return await renderPipelineStreaming(match, request, layouts, streamIndex, mode, options, sharedStatic, withMemoization);
-  const core = await withMemoization(() => renderPipelineCore(match, request, layouts, options));
-  return { kind: "sync", html: core.html, status: core.status, metadata: mergeMetadata([...sharedStatic, core.metadata]) };
+  try {
+    if (streamIndex >= 0) return await renderPipelineStreaming(match, request, layouts, streamIndex, mode, options, sharedStatic, withMemoization);
+    const core = await withMemoization(() => renderPipelineCore(match, request, layouts, options));
+    return { kind: "sync", html: core.html, status: core.status, metadata: mergeMetadata([...sharedStatic, core.metadata]) };
+  } catch (error) {
+    if (error instanceof RedirectError) return { kind: "redirect", response: error.response };
+    throw error;
+  }
 }
 
 function metaTags(metadata: Metadata): string {
@@ -316,10 +339,14 @@ async function drainStream(stream: ReadableStream<Uint8Array>): Promise<string> 
 export async function renderFull(route: Route): Promise<string> {
   const match: RouteMatch = { route, pathname: route.pattern, params: {} };
   const rendered = await renderFullMatch(match, new Request(`http://brandy.local${route.pattern}`));
-  return rendered.kind === "sync" ? rendered.html : drainStream(rendered.stream);
+  if (rendered.kind === "sync") return rendered.html;
+  if (rendered.kind === "stream") return drainStream(rendered.stream);
+  return "";
 }
 
 export async function renderFragment(diff: RouteDiff): Promise<string> {
   const rendered = await renderFragmentMatch(diff, new Request(`http://brandy.local${diff.target.pathname}`));
-  return rendered.kind === "sync" ? rendered.html : drainStream(rendered.stream);
+  if (rendered.kind === "sync") return rendered.html;
+  if (rendered.kind === "stream") return drainStream(rendered.stream);
+  return "";
 }
