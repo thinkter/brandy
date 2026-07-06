@@ -212,9 +212,16 @@ export async function buildManifest(appDirectory: string, cacheBust?: string): P
   const intercepted: InterceptCandidate[] = [];
   await walkDirectory(appDir, [], [], undefined, undefined, routes, actions, undefined, intercepted);
   routes.sort((a, b) => {
-    const dynamicA = a.segments.filter((segment) => segment.startsWith("[")).length;
-    const dynamicB = b.segments.filter((segment) => segment.startsWith("[")).length;
-    return dynamicA - dynamicB || b.segments.length - a.segments.length || a.pattern.localeCompare(b.pattern);
+    // Compare per-segment: at the first position where the two patterns differ,
+    // a static segment beats a dynamic one (Next.js static-first-per-segment rule).
+    const len = Math.min(a.segments.length, b.segments.length);
+    for (let i = 0; i < len; i++) {
+      const dynA = a.segments[i]!.startsWith("[");
+      const dynB = b.segments[i]!.startsWith("[");
+      if (dynA !== dynB) return dynA ? 1 : -1;
+    }
+    // All compared segments are equal in specificity; longer route is more specific.
+    return b.segments.length - a.segments.length;
   });
   if (routes.length === 0) throw new Error(`No page files found under ${appDir}`);
   for (const route of routes) {
