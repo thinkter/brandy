@@ -35,8 +35,8 @@ function sortedParams(params: Params): string {
 
 /** Exported for reuse by build.ts's prerender warm-up pass, which writes entries under the
  * same keys this module reads at request time. */
-export function keyFor(pattern: string, depth: number, params: Params, search: string): string {
-  return `${pattern}::${depth}::${sortedParams(params)}::${search}`;
+export function keyFor(pattern: string, depth: number, params: Params, search: string, missing = false): string {
+  return `${pattern}::${depth}::${sortedParams(params)}::${search}::${missing ? "missing" : "matched"}`;
 }
 
 function isFresh(entry: RenderCacheEntry | undefined): entry is RenderCacheEntry {
@@ -56,7 +56,7 @@ export async function renderFullMatchCached(match: RouteMatch, request: Request,
   const pageCache = match.route.page.cache;
   if (!pageCache || options.dev) return renderFullMatch(match, request, options);
   const depth = match.route.layouts.length;
-  const key = keyFor(match.route.pattern, depth, match.params, new URL(request.url).search);
+  const key = keyFor(match.route.pattern, depth, match.params, new URL(request.url).search, match.missing);
   const existing = cache.get(key);
   if (isFresh(existing)) return toRendered(existing);
   const rendered = await renderFullMatch(match, request, options);
@@ -68,7 +68,7 @@ export async function renderFragmentMatchCached(diff: RouteDiff, request: Reques
   const pageCache = diff.target.route.page.cache;
   if (!pageCache || options.dev) return renderFragmentMatch(diff, request, options);
   const depth = diff.chainToRender.length;
-  const key = keyFor(diff.target.route.pattern, depth, diff.target.params, new URL(request.url).search);
+  const key = keyFor(diff.target.route.pattern, depth, diff.target.params, new URL(request.url).search, diff.target.missing);
   const existing = cache.get(key);
   if (isFresh(existing)) return toRendered(existing);
   const rendered = await renderFragmentMatch(diff, request, options);
@@ -84,7 +84,7 @@ export async function renderFragmentMatchFresh(diff: RouteDiff, request: Request
   const pageCache = diff.target.route.page.cache;
   if (pageCache && !options.dev) {
     const depth = diff.chainToRender.length;
-    const key = keyFor(diff.target.route.pattern, depth, diff.target.params, new URL(request.url).search);
+    const key = keyFor(diff.target.route.pattern, depth, diff.target.params, new URL(request.url).search, diff.target.missing);
     writeThrough(cache, key, pageCache.revalidateSeconds, rendered);
   }
   return rendered;

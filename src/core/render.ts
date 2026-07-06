@@ -11,6 +11,8 @@ type RenderNode = LayoutNode | PageNode;
 type RenderMode = "fragment" | "document";
 
 const STREAM_BOUNDARY = "<!--brandy:stream-boundary-->";
+const ERROR_METADATA: Metadata = { title: "Error" };
+const NOT_FOUND_METADATA: Metadata = { title: "Not Found" };
 
 function outlet(layout: LayoutNode, children: string): JSX.Element {
   return `<div id="${slotId(layout.id)}" data-brandy-slot>${children}</div>` as JSX.Element;
@@ -32,6 +34,13 @@ function mergeMetadata(entries: Metadata[]): Metadata {
     Object.assign(result.meta!, entry.meta);
   }
   return result;
+}
+
+function completedMetadata(match: RouteMatch, rendered: Pick<SyncRenderedRoute, "metadata" | "status">, inherited: Metadata[]): Metadata {
+  if (rendered.status === 404) return NOT_FOUND_METADATA;
+  if (rendered.status >= 500) return ERROR_METADATA;
+  if (match.missing && match.route.page.metadata === undefined) return NOT_FOUND_METADATA;
+  return mergeMetadata([...inherited, rendered.metadata]);
 }
 
 async function loadNodes(match: RouteMatch, request: Request, nodes: RenderNode[]): Promise<LoadedRoute> {
@@ -96,14 +105,14 @@ async function renderPipelineCore(match: RouteMatch, request: Request, layouts: 
       const html = String(await renderer(base));
       const safeLayouts = layouts.slice(0, Math.min(index + 1, layouts.length));
       const loaded: LoadedRoute = { match, data: new Map(), metadata: {} };
-      return { html: await wrap(html, safeLayouts, loaded, request), metadata: {}, status: 404 };
+      return { html: await wrap(html, safeLayouts, loaded, request), metadata: NOT_FOUND_METADATA, status: 404 };
     }
     const renderer = nearestRenderer(nodes, index, "renderError");
     if (!renderer) throw error;
     const html = String(await renderer({ ...base, error, dev: options.dev === true }));
     const safeLayouts = layouts.slice(0, Math.min(index, layouts.length));
     const loaded: LoadedRoute = { match, data: new Map(), metadata: {} };
-    return { html: await wrap(html, safeLayouts, loaded, request), metadata: {}, status: 500 };
+    return { html: await wrap(html, safeLayouts, loaded, request), metadata: ERROR_METADATA, status: 500 };
   }
 }
 
@@ -189,9 +198,10 @@ function renderPipelineStreaming(
       try {
         const deeper = await withMemoization(() => renderPipelineCore(match, request, deeperLayouts, options));
         html = deeper.html;
-        metadata = mergeMetadata([...sharedStatic, ancestorMetadata, deeper.metadata]);
+        metadata = completedMetadata(match, deeper, [...sharedStatic, ancestorMetadata]);
       } catch {
         html = "<p>Something went wrong.</p>";
+        metadata = ERROR_METADATA;
       }
       const tail = mode === "document"
         ? inlineSwap(anchorId, html) + inlineMetaSwap(metadata) + documentClosing
@@ -220,7 +230,7 @@ async function renderPipeline(
   const streamIndex = findStreamingIndex(nodes, minIndex);
   if (streamIndex >= 0) return renderPipelineStreaming(match, request, layouts, streamIndex, mode, options, sharedStatic, withMemoization);
   const core = await withMemoization(() => renderPipelineCore(match, request, layouts, options));
-  return { kind: "sync", html: core.html, status: core.status, metadata: mergeMetadata([...sharedStatic, core.metadata]) };
+  return { kind: "sync", html: core.html, status: core.status, metadata: completedMetadata(match, core, sharedStatic) };
 }
 
 function metaTags(metadata: Metadata): string {

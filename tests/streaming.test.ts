@@ -122,6 +122,7 @@ test("a loader error after the skeleton ships stays status 200 and renders the b
   }
   rest += decoder.decode();
   expect(rest).toContain("boundary: boom");
+  expect(rest).toContain("<title data-brandy-metadata>Error");
   expect(rest).toContain("</body></html>");
 });
 

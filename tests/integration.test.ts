@@ -279,9 +279,16 @@ test("partial metadata is emitted out of band", async () => {
 
 test("loader notFound uses the nearest not-found boundary", async () => {
   const app = await createBrandy({ appDir });
-  const response = await app.handle(new Request("http://localhost/dashboard/users/missing"));
+  const response = await app.handle(new Request("http://localhost/dashboard/users/missing", { headers: {
+    "x-brandy-navigation": "1",
+    "x-brandy-current-url": "/dashboard/users/42",
+  }}));
   expect(response.status).toBe(404);
-  expect(await response.text()).toContain("The requested page does not exist");
+  const html = await response.text();
+  expect(html).toContain("The requested page does not exist");
+  expect(html).toContain("<title data-brandy-metadata>Not Found</title>");
+  expect(html).not.toContain("User 42 · Brandy");
+  expect(html).not.toContain('name="section"');
 });
 
 test("production error boundaries hide loader details on full and partial navigation", async () => {
@@ -301,6 +308,9 @@ test("production error boundaries hide loader details on full and partial naviga
   const fragment = await partial.text();
   expect(fragment).toContain("Something went wrong.");
   expect(fragment).not.toContain("User loader failed");
+  expect(fragment).toContain("<title data-brandy-metadata>Error</title>");
+  expect(fragment).not.toContain("About · Brandy");
+  expect(fragment).not.toContain('name="description"');
 });
 
 test("development error boundaries can render loader details", async () => {
@@ -320,6 +330,35 @@ test("unknown URLs render the explicit 404 route", async () => {
   await app.handle(new Request("http://localhost/still-does-not-exist"));
   expect(manifest.notFoundRoute).toBe(cachedRoute);
   expect(cachedRoute).toBe(manifest.routes.find((route) => route.pattern === "/404"));
+});
+
+test("partial unknown URLs replace stale metadata with a not-found title", async () => {
+  const manifest = await buildManifest(appDir);
+  const app = await createRuntime({ manifest });
+  const response = await app.handle(new Request("http://localhost/does-not-exist", { headers: {
+    "x-brandy-navigation": "1",
+    "x-brandy-current-url": "/about",
+  }}));
+  expect(response.status).toBe(404);
+  const html = await response.text();
+  expect(html).toContain("<template data-brandy-head><title data-brandy-metadata>Not Found</title></template>");
+  expect(html).not.toContain("About · Brandy");
+  expect(html).not.toContain('name="description"');
+});
+
+test("an explicit 404 page can provide custom metadata", async () => {
+  const manifest = await buildManifest(appDir);
+  const notFoundPage = manifest.routes.find((route) => route.pattern === "/404")!.page;
+  notFoundPage.metadata = { title: "Custom missing page", meta: { robots: "noindex" } };
+  const app = await createRuntime({ manifest });
+  const response = await app.handle(new Request("http://localhost/does-not-exist", { headers: {
+    "x-brandy-navigation": "1",
+    "x-brandy-current-url": "/about",
+  }}));
+  const html = await response.text();
+  expect(response.status).toBe(404);
+  expect(html).toContain("Custom missing page");
+  expect(html).toContain('name="robots" content="noindex"');
 });
 
 test("colocated actions mutate and revalidate a fragment", async () => {

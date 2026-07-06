@@ -141,7 +141,7 @@ function resolveMatch(manifest: RouteManifest, pathname: string): { match: Route
   try { return { match: matchRoute(manifest, pathname), missing: false }; }
   catch (error) {
     if (!(error instanceof RouteNotFoundError)) throw error;
-    return { match: { route: manifest.notFoundRoute!, pathname, params: {} }, missing: true };
+    return { match: { route: manifest.notFoundRoute!, pathname, params: {}, missing: true }, missing: true };
   }
 }
 

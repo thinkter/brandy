@@ -135,6 +135,8 @@ export interface RouteMatch {
   route: Route;
   pathname: string;
   params: Params;
+  /** True when this match renders the not-found route for an unmatched pathname. */
+  missing?: boolean;
 }
 
 export interface RouteDiff {
