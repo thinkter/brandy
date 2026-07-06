@@ -183,6 +183,13 @@ function injectAlpineCloakStyle(document: string): string {
   return insertBeforeClosingTag(document, "head", style) ?? `${style}${document}`;
 }
 
+function injectAlpineModulePreload(document: string, alpineChunkPath: string): string {
+  if (!hasElementAttribute(document, undefined, "data-brandy-island", "")) return document;
+  if (hasElementAttribute(document, "link", "href", alpineChunkPath)) return document;
+  const link = `<link rel="modulepreload" href="${escapeAttribute(alpineChunkPath)}">`;
+  return insertBeforeClosingTag(document, "head", link) ?? `${link}${document}`;
+}
+
 function injectDevRuntime(document: string): string {
   if (hasElementAttribute(document, "script", "src", "/_brandy/dev.js")) return document;
   const script = `<script type="module" src="/_brandy/dev.js"></script>`;
@@ -351,7 +358,10 @@ export async function createBrandy(options: BrandyOptions): Promise<BrandyApplic
       const stream = injectIntoFirstChunk(rendered.stream, (html) => {
         let document = injectClientRuntime(html, clientPath);
         if (stylesheetPath) document = injectStylesheet(document, stylesheetPath);
-        if (alpineChunkPath) document = injectAlpineCloakStyle(document);
+        if (alpineChunkPath) {
+          document = injectAlpineCloakStyle(document);
+          document = injectAlpineModulePreload(document, alpineChunkPath);
+        }
         if (options.dev) document = injectDevRuntime(document);
         if (hasInterceptedRoutes) document = injectModalOutlet(document);
         return document;
@@ -360,7 +370,10 @@ export async function createBrandy(options: BrandyOptions): Promise<BrandyApplic
     }
     let document = injectClientRuntime(injectMetadata(rendered.html, rendered.metadata), clientPath);
     if (stylesheetPath) document = injectStylesheet(document, stylesheetPath);
-    if (alpineChunkPath) document = injectAlpineCloakStyle(document);
+    if (alpineChunkPath) {
+      document = injectAlpineCloakStyle(document);
+      document = injectAlpineModulePreload(document, alpineChunkPath);
+    }
     if (options.dev) document = injectDevRuntime(document);
     if (hasInterceptedRoutes) document = injectModalOutlet(document);
     return new Response(request.method === "HEAD" ? null : document, { status: targetResult.missing ? 404 : rendered.status, headers });

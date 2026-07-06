@@ -237,7 +237,7 @@ test("cold-load streaming flushes the skeleton fast, injects assets into the fir
     writeFile(join(dir, "loading.tsx"), `
       import { Html } from "@elysiajs/html";
       export default function Loading() {
-        return <main>SKELETON-MARKER</main>;
+        return <main data-brandy-island>SKELETON-MARKER</main>;
       }
     `),
     writeFile(join(dir, "page.tsx"), `
@@ -268,6 +268,7 @@ test("cold-load streaming flushes the skeleton fast, injects assets into the fir
     expect(firstChunk).toContain("/_brandy/runtime.js");
     expect(firstChunk).toContain("/_brandy/app.css");
     expect(firstChunk).toContain("[x-cloak]{display:none!important}");
+    expect(firstChunk.match(/<link rel="modulepreload" href="\/_brandy\/alpine\.js">/g)).toHaveLength(1);
     expect(firstChunk).toContain("/_brandy/dev.js");
     expect(firstChunk).toContain("SKELETON-MARKER");
     expect(firstChunk).not.toContain("REAL-MARKER");

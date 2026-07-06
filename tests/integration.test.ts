@@ -207,6 +207,42 @@ test("the example uses Alpine islands without a custom client entrypoint", async
   expect(html).toContain("data-brandy-island");
   expect(html).toContain('x-data="{ count: 0, open: true }"');
   expect(html).toContain('x-on:click="count++"');
+  expect(html.match(/<link rel="modulepreload" href="\/_brandy\/alpine\.js">/g)).toHaveLength(1);
+
+  const staticHtml = await (await app.handle(new Request("http://localhost/about"))).text();
+  expect(staticHtml).not.toContain('rel="modulepreload"');
+
+  const disabled = await createBrandy({ appDir, alpine: false });
+  const disabledHtml = await (await disabled.handle(new Request("http://localhost/"))).text();
+  expect(disabledHtml).not.toContain('rel="modulepreload"');
+});
+
+test("an application-provided Alpine module preload is not duplicated", async () => {
+  const root = await mkdtemp(join(process.cwd(), ".brandy-test-modulepreload-"));
+  const dir = join(root, "app");
+  await mkdir(dir, { recursive: true });
+  await Promise.all([
+    Bun.write(join(dir, "layout.tsx"), `
+      import { Html } from "@elysiajs/html";
+      export default function Layout({ children }) {
+        return <html><head><link rel="modulepreload" href="/_brandy/alpine.js" /></head><body>{children}</body></html>;
+      }
+    `),
+    Bun.write(join(dir, "page.tsx"), `
+      import { Html } from "@elysiajs/html";
+      export default function Page() {
+        return <main data-brandy-island>Interactive</main>;
+      }
+    `),
+  ]);
+
+  try {
+    const app = await createBrandy({ appDir: dir });
+    const html = await (await app.handle(new Request("http://localhost/"))).text();
+    expect(html.match(/<link rel="modulepreload" href="\/_brandy\/alpine\.js"\/>/g)).toHaveLength(1);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("Island renders an explicit data-brandy-island boundary", async () => {
