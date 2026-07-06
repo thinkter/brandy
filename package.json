@@ -29,6 +29,7 @@
   "devDependencies": {
     "@types/alpinejs": "^3.13.11",
     "@types/bun": "latest",
+    "happy-dom": "^20.10.6",
     "typescript": "5.9.3"
   }
 }
