@@ -104,7 +104,9 @@ app/
 
 `(.)name`, `(..)name`, and `(...)name` directories intercept soft navigation to an existing standalone route and render its alternate page into a reserved modal outlet; a hard load of the same URL renders the standalone page. The dot count is relative to the marker's own directory, matching Next's semantics.
 
-Next.js conventions Brandy does not implement: route groups (a `(group)` directory is currently treated as a literal segment name), catch-all segments (`[...slug]`), and `generateStaticParams`.
+Route groups — `(group)` directories — are supported: the directory name is stripped from the URL so `app/(marketing)/about/page.tsx` produces the route `/about`. The group name must contain only letters, digits, underscores, hyphens, or spaces; any other parenthesised directory name that is not a valid intercept marker throws a clear error at startup.
+
+Next.js conventions Brandy does not yet implement: catch-all segments (`[...slug]`) and `generateStaticParams`. A `[...slug]` directory is currently treated as a literal dynamic segment named `...slug`, so catch-all routes silently match only one level; `generateStaticParams` has no equivalent export and will be ignored.
 
 Server JSX is rendered to strings by `@elysiajs/html`; it is never hydrated. Brandy automatically injects its client runtime, so the root layout needs no script setup:
 

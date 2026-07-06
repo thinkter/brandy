@@ -30,6 +30,19 @@ function parseInterceptMarker(name: string): InterceptMarker | undefined {
   return { levels: marker.length / 4, targetName };
 }
 
+/** Returns true for a route-group directory: a plain `(name)` with one or more word
+ * characters, hyphens, or spaces — no dots. Route groups are excluded from the URL path. */
+function isRouteGroup(name: string): boolean {
+  return /^\([A-Za-z0-9_][A-Za-z0-9_\- ]*\)$/.test(name);
+}
+
+/** Returns true for any directory name that opens with `(` but is not recognised as a valid
+ * intercept marker or a route group.  Intercept markers always start with `(.`, so a leading
+ * `(` followed by a non-dot character is either a route group or something we should reject. */
+function isUnknownParenthesized(name: string): boolean {
+  return name.startsWith("(") && !isRouteGroup(name) && !parseInterceptMarker(name);
+}
+
 interface InterceptCandidate {
   targetPattern: string;
   fromSegments: string[];
@@ -181,6 +194,20 @@ async function walkDirectory(
     .filter((entry) => entry.isDirectory() && !entry.name.startsWith("_") && !entry.name.startsWith("."))
     .sort((a, b) => a.name.localeCompare(b.name));
   await Promise.all(directories.map(async (entry) => {
+    // Route groups — (name) directories — are transparent to the URL: we descend into them
+    // without appending any segment. Intercepting markers inside a route group are still
+    // recognised normally.
+    if (isRouteGroup(entry.name)) {
+      await walkDirectory(join(directory, entry.name), segments, layouts, renderError, renderNotFound, routes, actions, interceptFrom, intercepted);
+      return;
+    }
+    // Any other parenthesised name that is not a valid intercept marker is an error.
+    // isUnknownParenthesized already excludes route groups and valid markers, so this
+    // catches things like "(marketing-2)" (digits-only groups are allowed) but would
+    // trip on, e.g., "(bad name!)" or a bare "()".
+    if (isUnknownParenthesized(entry.name)) {
+      throw new Error(`Directory "${entry.name}" in ${directory} uses parentheses but is not a recognised intercept marker (e.g. (.)name) or route group (e.g. (marketing)). Rename it or wrap it in a valid route-group name.`);
+    }
     // Intercepting markers are only recognized outside an existing intercepting subtree —
     // a marker nested inside another marker's directory is not supported.
     const marker = !interceptFrom ? parseInterceptMarker(entry.name) : undefined;
