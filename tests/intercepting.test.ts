@@ -138,6 +138,97 @@ test("boot fails when an intercepting marker has no matching standalone route", 
   }
 });
 
+test("route groups are excluded from the URL path", async () => {
+  const { dir, cleanup } = await tempApp({
+    "layout.tsx": LAYOUT,
+    "(marketing)/page.tsx": `import { Html } from "@elysiajs/html"; export default function Home() { return <main>home</main>; }`,
+    "(marketing)/about/page.tsx": `import { Html } from "@elysiajs/html"; export default function About() { return <main>about</main>; }`,
+    "(auth)/login/page.tsx": `import { Html } from "@elysiajs/html"; export default function Login() { return <main>login</main>; }`,
+  });
+  try {
+    const manifest = await buildManifest(dir);
+    const patterns = manifest.routes.map((route) => route.pattern).sort();
+    // Route group names must NOT appear in the URL patterns
+    expect(patterns).not.toContain("/(marketing)");
+    expect(patterns).not.toContain("/(marketing)/about");
+    expect(patterns).not.toContain("/(auth)/login");
+    expect(patterns).toContain("/");
+    expect(patterns).toContain("/about");
+    expect(patterns).toContain("/login");
+
+    // Requests to the unwrapped URLs must respond with 200
+    const app = await createBrandy({ appDir: dir });
+    expect((await app.handle(new Request("http://localhost/"))).status).toBe(200);
+    expect((await app.handle(new Request("http://localhost/about"))).status).toBe(200);
+    expect((await app.handle(new Request("http://localhost/login"))).status).toBe(200);
+  } finally {
+    await cleanup();
+  }
+});
+
+test("route groups with hyphens and underscores are also excluded from the URL", async () => {
+  const { dir, cleanup } = await tempApp({
+    "layout.tsx": LAYOUT,
+    "(my-group)/page.tsx": `import { Html } from "@elysiajs/html"; export default function Home() { return <main>home</main>; }`,
+    "(my_group)/settings/page.tsx": `import { Html } from "@elysiajs/html"; export default function Settings() { return <main>settings</main>; }`,
+  });
+  try {
+    const manifest = await buildManifest(dir);
+    const patterns = manifest.routes.map((route) => route.pattern).sort();
+    expect(patterns).toContain("/");
+    expect(patterns).toContain("/settings");
+    expect(patterns).not.toContain("/(my-group)");
+    expect(patterns).not.toContain("/(my_group)/settings");
+  } finally {
+    await cleanup();
+  }
+});
+
+test("intercept markers inside a route group still work", async () => {
+  const { dir, cleanup } = await tempApp({
+    "layout.tsx": LAYOUT,
+    "page.tsx": `import { Html } from "@elysiajs/html"; export default function Home() { return <main>home</main>; }`,
+    "photo/page.tsx": `import { Html } from "@elysiajs/html"; export default function Photo() { return <main>photo</main>; }`,
+    "(feed)/page.tsx": `import { Html } from "@elysiajs/html"; export default function Feed() { return <main>feed</main>; }`,
+    "(feed)/(.)photo/page.tsx": `import { Html } from "@elysiajs/html"; export default function Modal() { return <main>modal</main>; }`,
+  });
+  try {
+    const manifest = await buildManifest(dir);
+    const photoRoute = manifest.routes.find((r) => r.pattern === "/photo");
+    expect(photoRoute).toBeDefined();
+    expect(photoRoute!.interceptedBy).toBeDefined();
+    expect(photoRoute!.interceptedBy).toHaveLength(1);
+  } finally {
+    await cleanup();
+  }
+});
+
+test("boot fails when a directory uses parentheses but is not a route group or intercept marker", async () => {
+  const { dir, cleanup } = await tempApp({
+    "layout.tsx": LAYOUT,
+    "page.tsx": `import { Html } from "@elysiajs/html"; export default function Page() { return <main>home</main>; }`,
+    "(bad!name)/page.tsx": `import { Html } from "@elysiajs/html"; export default function Bad() { return <main>bad</main>; }`,
+  });
+  try {
+    await expect(buildManifest(dir)).rejects.toThrow(/not a recognised intercept marker.*route group/);
+  } finally {
+    await cleanup();
+  }
+});
+
+test("boot fails when a bare empty-parens directory name is used", async () => {
+  const { dir, cleanup } = await tempApp({
+    "layout.tsx": LAYOUT,
+    "page.tsx": `import { Html } from "@elysiajs/html"; export default function Page() { return <main>home</main>; }`,
+    "()/page.tsx": `import { Html } from "@elysiajs/html"; export default function Empty() { return <main>empty</main>; }`,
+  });
+  try {
+    await expect(buildManifest(dir)).rejects.toThrow(/not a recognised intercept marker.*route group/);
+  } finally {
+    await cleanup();
+  }
+});
+
 test("boot fails when two intercepting markers declare the same source location for the same target", async () => {
   // Both markers live directly in feed/ (same fromSegments) and, via different level syntax,
   // both resolve to the same root-level target — a genuine ambiguous duplicate.
