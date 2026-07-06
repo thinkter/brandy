@@ -400,3 +400,54 @@ test("cold-load full-document responses carry Vary on both brandy navigation hea
   expect(response.headers.get("vary")).toContain("x-brandy-navigation");
   expect(response.headers.get("vary")).toContain("x-brandy-current-url");
 });
+
+test("action params come from the server-side action route, not from the client-supplied header", async () => {
+  const manifest = await buildManifest(appDir);
+  let capturedParams: Record<string, string> | undefined;
+  const path = "/_brandy/actions/test/params-check";
+  const handler = (async (_form, context) => {
+    capturedParams = context.params;
+  }) as unknown as ServerAction;
+  manifest.actions.set(path, { id: "test", path, segmentPath: "dashboard/users/[id]", file: "test", name: "test", handler });
+
+  const app = await createRuntime({ manifest });
+
+  // A client spoofing x-brandy-current-url=/dashboard/users/42 should NOT produce params.id="42"
+  await app.handle(new Request(`http://localhost${path}`, {
+    method: "POST",
+    headers: {
+      origin: "http://localhost",
+      "x-brandy-current-url": "/dashboard/users/42",
+      "content-type": "application/x-www-form-urlencoded",
+    },
+    body: "",
+  }));
+  expect(capturedParams).toEqual({});
+});
+
+test("action url is the actual request URL and preserves the query string", async () => {
+  const manifest = await buildManifest(appDir);
+  let capturedUrl: URL | undefined;
+  const path = "/_brandy/actions/test/url-check";
+  const handler = (async (_form, context) => {
+    capturedUrl = context.url;
+  }) as unknown as ServerAction;
+  manifest.actions.set(path, { id: "test", path, segmentPath: "", file: "test", name: "test", handler });
+
+  const app = await createRuntime({ manifest });
+
+  // Submit to the action with a query string on the action URL
+  await app.handle(new Request(`http://localhost${path}?ref=newsletter`, {
+    method: "POST",
+    headers: {
+      origin: "http://localhost",
+      // Even if the current-url header has a different query string, the action url should be the actual request url
+      "x-brandy-current-url": "/dashboard?tab=users",
+      "content-type": "application/x-www-form-urlencoded",
+    },
+    body: "",
+  }));
+  expect(capturedUrl?.pathname).toBe(path);
+  expect(capturedUrl?.searchParams.get("ref")).toBe("newsletter");
+  expect(capturedUrl?.href).toBe(`http://localhost${path}?ref=newsletter`);
+});
