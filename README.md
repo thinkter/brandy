@@ -173,11 +173,15 @@ The cache stores everything above the page too: the route's ancestor layouts ren
 
 The client runtime intercepts same-origin links and forms, fetches the diverged fragment, and swaps it at the boundary the server names in its response headers. Hovering or focusing a link for a moment prefetches its fragment; a prefetched entry is used only if the page it was requested from is still the current page.
 
-Three attributes opt out per element:
+Three boolean attributes opt out per element. Their presence enables the behavior; no value is required.
 
-- `data-brandy-reload` — on a link or form: skip interception and perform a full-page navigation.
-- `data-brandy-no-prefetch` — on a link: never prefetch on hover or focus.
-- `data-brandy-no-intercept` — on a link: navigate to the standalone route even when an intercepting (modal) route exists for it.
+| Attribute | Allowed elements | Behavior |
+| --- | --- | --- |
+| `data-brandy-reload` | `<a>`, `<form>` | Bypass the client runtime and let the browser perform a full-page navigation or native form submission. Links with this attribute are not prefetched. |
+| `data-brandy-no-prefetch` | `<a>` | Disable hover and focus prefetching. Clicking the link still uses normal soft navigation and remains eligible for an intercepting route. |
+| `data-brandy-no-intercept` | `<a>` | Use soft navigation to the standalone route even when an intercepting (modal) route is available. These links are not prefetched because the normal prefetched response could target the intercepting route. |
+
+When attributes are combined, `data-brandy-reload` takes precedence because the client runtime does not handle the link at all. Combining `data-brandy-no-intercept` with `data-brandy-no-prefetch` is allowed but redundant: `data-brandy-no-intercept` already disables prefetching. `data-brandy-no-prefetch` and `data-brandy-no-intercept` have no effect on forms.
 
 ## Actions
 
