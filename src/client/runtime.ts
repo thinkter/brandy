@@ -14,6 +14,7 @@ const CURRENT = "x-brandy-current-url";
 const PREFETCH = "x-brandy-prefetch";
 const STREAM = "x-brandy-stream";
 const NO_INTERCEPT = "x-brandy-no-intercept";
+const REDIRECT = "x-brandy-redirect";
 const STREAM_BOUNDARY = "<!--brandy:stream-boundary-->";
 const HOVER_DELAY = 100;
 const PREFETCH_TTL_MS = 30_000;
@@ -122,7 +123,8 @@ interface PrefetchEntry {
 
 type PrefetchedResult =
   | { kind: "fragment"; result: FragmentResult }
-  | { kind: "stream"; response: Response };
+  | { kind: "stream"; response: Response }
+  | { kind: "redirect"; location: string };
 
 const prefetchCache = new Map<string, PrefetchEntry>();
 let armedLink: HTMLAnchorElement | null = null;
@@ -232,6 +234,8 @@ async function readFragment(response: Response): Promise<FragmentResult> {
 
 async function fetchPrefetch(url: URL): Promise<PrefetchedResult> {
   const response = await performFetch(url, undefined, true);
+  const redirectTarget = response.headers.get(REDIRECT);
+  if (redirectTarget) return { kind: "redirect", location: redirectTarget };
   return response.headers.get(STREAM) === "1" && response.body
     ? { kind: "stream", response }
     : { kind: "fragment", result: await readFragment(response) };
@@ -338,6 +342,7 @@ async function navigate(url: URL, init?: RequestInit, historyMode: "push" | "non
     prefetchCache.delete(key);
     try {
       const prefetched = await cached.promise;
+      if (prefetched.kind === "redirect") { location.assign(prefetched.location); return; }
       if (prefetched.kind === "stream") await applyStreamedFragment(prefetched.response, url, historyMode);
       else applyFragment(prefetched.result, url, historyMode);
     } catch {
@@ -352,6 +357,12 @@ async function navigate(url: URL, init?: RequestInit, historyMode: "push" | "non
     response = await performFetch(url, init);
   } catch {
     location.assign(url);
+    return;
+  }
+
+  const redirectTarget = response.headers.get(REDIRECT);
+  if (redirectTarget) {
+    location.assign(redirectTarget);
     return;
   }
 
