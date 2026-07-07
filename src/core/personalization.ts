@@ -79,6 +79,9 @@ export function guardPersonalizedRequest(request: Request, routePattern: string)
     // Request instance, so passthrough binds to `target`, never `receiver` (the Proxy).
     get(target, prop) {
       if (prop === "headers") return guardHeaders(target.headers, routePattern);
+      // A clone must stay guarded — helper libraries routinely clone a request before reading
+      // it, and an unguarded clone would be a silent bypass.
+      if (prop === "clone") return () => guardPersonalizedRequest(target.clone(), routePattern);
       const value = Reflect.get(target, prop, target);
       return typeof value === "function" ? value.bind(target) : value;
     },

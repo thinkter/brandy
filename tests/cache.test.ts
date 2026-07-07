@@ -249,6 +249,20 @@ test("the guard also throws for renderFragmentMatchCached and renderFragmentMatc
   await expect(renderFragmentMatchFresh(diff, request, {}, createMemoryRenderCache())).rejects.toThrow(PersonalizedRequestError);
 });
 
+test("cloning the guarded request does not bypass the guard", async () => {
+  const root: LayoutNode = { id: "root", directory: "/app", file: "/app/layout.tsx", render: ({ children }) => `<html>${children}</html>` as JSX.Element };
+  const page: PageNode = {
+    id: "root/page", directory: "/app", file: "/app/page.tsx",
+    load: ({ request }) => request.clone().headers.get("cookie"),
+    render: ({ data }) => `<main>${data}</main>` as JSX.Element,
+    cache: { revalidateSeconds: null },
+  };
+  const route: Route = { id: "/", pattern: "/", segments: [], layouts: [root], page, pageFile: page.file, renderPage: page.render };
+  const match: RouteMatch = { route, pathname: "/", params: {} };
+  const request = new Request("http://localhost/", { headers: { cookie: "session=abc" } });
+  await expect(renderFullMatchCached(match, request, {}, createMemoryRenderCache())).rejects.toThrow(PersonalizedRequestError);
+});
+
 test("full header iteration also throws for a cache-eligible route", async () => {
   const root: LayoutNode = { id: "root", directory: "/app", file: "/app/layout.tsx", render: ({ children }) => `<html>${children}</html>` as JSX.Element };
   const page: PageNode = {
