@@ -221,6 +221,14 @@ function performFetch(url: URL, init?: RequestInit, prefetch = false): Promise<R
   return fetch(url, { ...init, headers: fetchHeaders(init, prefetch) });
 }
 
+// Monotonic "latest wins" guard for navigate(): every call gets its own token and its own
+// AbortController. If a newer navigation starts before an older one finishes, the older one's
+// in-flight fetch is aborted and, even if it still resolves (e.g. a mocked fetch that ignores
+// the signal), it is barred from touching the DOM, history, or renderedURL once its token is
+// stale — preventing a slow response A from clobbering a faster, later navigation B.
+let navigationToken = 0;
+let currentNavigationAbort: AbortController | null = null;
+
 async function readFragment(response: Response): Promise<FragmentResult> {
   return {
     html: await response.text(),
@@ -275,13 +283,18 @@ function applyFragment(result: FragmentResult, url: URL, historyMode: "push" | "
   announceNavigation();
 }
 
-async function applyStreamedFragment(response: Response, url: URL, historyMode: "push" | "none"): Promise<void> {
+async function applyStreamedFragment(
+  response: Response,
+  url: URL,
+  historyMode: "push" | "none",
+  isCurrent: () => boolean = () => true,
+): Promise<void> {
   const retarget = response.headers.get("x-brandy-retarget");
   const reswap = response.headers.get("x-brandy-reswap");
   const finalURLHeader = response.headers.get("x-brandy-url");
   const target = retarget && document.querySelector(retarget);
   if (!target || reswap !== "innerHTML" || !response.body) {
-    location.assign(finalURLHeader ?? url.href);
+    if (isCurrent()) location.assign(finalURLHeader ?? url.href);
     return;
   }
   prefetchCache.clear();
@@ -294,6 +307,10 @@ async function applyStreamedFragment(response: Response, url: URL, historyMode: 
 
   for (;;) {
     const { done, value } = await reader.read();
+    // A newer navigation superseded this one mid-stream — stop consuming and never touch the
+    // (now stale) target, history, or renderedURL. The reader is abandoned; the underlying
+    // fetch was already aborted via the AbortController passed in by navigate().
+    if (!isCurrent()) return;
     if (value) buffer += decoder.decode(value, { stream: true });
     if (!skeletonApplied) {
       const split = splitStream(buffer);
@@ -307,6 +324,7 @@ async function applyStreamedFragment(response: Response, url: URL, historyMode: 
     }
     if (done) break;
   }
+  if (!isCurrent()) return;
   buffer += decoder.decode();
   if (!skeletonApplied) {
     const template = document.createElement("template");
@@ -335,54 +353,77 @@ async function applyStreamedFragment(response: Response, url: URL, historyMode: 
 }
 
 async function navigate(url: URL, init?: RequestInit, historyMode: "push" | "none" = "push"): Promise<void> {
-  const key = cacheKey(url);
-  const cached = !init ? prefetchCache.get(key) : undefined;
-  const fresh = cached && Date.now() - cached.addedAt < PREFETCH_TTL_MS;
-  if (fresh && cached.currentURL === renderedURL) {
-    prefetchCache.delete(key);
-    try {
-      const prefetched = await cached.promise;
-      if (prefetched.kind === "redirect") { location.assign(prefetched.location); return; }
-      if (prefetched.kind === "stream") await applyStreamedFragment(prefetched.response, url, historyMode);
-      else applyFragment(prefetched.result, url, historyMode);
-    } catch {
-      location.assign(url);
-    }
-    return;
-  }
-  if (cached && !fresh) prefetchCache.delete(key);
+  // Claim this navigation as the latest. Abort whatever came before so its fetch stops consuming
+  // bandwidth/CPU, then take a fresh token + AbortController for this call.
+  currentNavigationAbort?.abort();
+  const token = ++navigationToken;
+  const abort = new AbortController();
+  currentNavigationAbort = abort;
+  const isCurrent = () => token === navigationToken;
 
-  let response: Response;
   try {
-    response = await performFetch(url, init);
-  } catch {
-    location.assign(url);
-    return;
-  }
-
-  const redirectTarget = response.headers.get(REDIRECT);
-  if (redirectTarget) {
-    location.assign(redirectTarget);
-    return;
-  }
-
-  if (response.headers.get(STREAM) === "1") {
-    try {
-      await applyStreamedFragment(response, url, historyMode);
-    } catch {
-      location.assign(url);
+    const key = cacheKey(url);
+    const cached = !init ? prefetchCache.get(key) : undefined;
+    const fresh = cached && Date.now() - cached.addedAt < PREFETCH_TTL_MS;
+    if (fresh && cached.currentURL === renderedURL) {
+      prefetchCache.delete(key);
+      try {
+        const prefetched = await cached.promise;
+        if (!isCurrent()) return;
+        if (prefetched.kind === "redirect") { location.assign(prefetched.location); return; }
+        if (prefetched.kind === "stream") await applyStreamedFragment(prefetched.response, url, historyMode, isCurrent);
+        else applyFragment(prefetched.result, url, historyMode);
+      } catch (error) {
+        if (isAbortError(error) || !isCurrent()) return;
+        location.assign(url);
+      }
+      return;
     }
-    return;
-  }
+    if (cached && !fresh) prefetchCache.delete(key);
 
-  let result: FragmentResult;
-  try {
-    result = await readFragment(response);
-  } catch {
-    location.assign(url);
-    return;
+    let response: Response;
+    try {
+      response = await performFetch(url, { ...init, signal: abort.signal });
+    } catch (error) {
+      if (isAbortError(error) || !isCurrent()) return;
+      location.assign(url);
+      return;
+    }
+    if (!isCurrent()) return;
+
+    const redirectTarget = response.headers.get(REDIRECT);
+    if (redirectTarget) {
+      location.assign(redirectTarget);
+      return;
+    }
+
+    if (response.headers.get(STREAM) === "1") {
+      try {
+        await applyStreamedFragment(response, url, historyMode, isCurrent);
+      } catch (error) {
+        if (isAbortError(error) || !isCurrent()) return;
+        location.assign(url);
+      }
+      return;
+    }
+
+    let result: FragmentResult;
+    try {
+      result = await readFragment(response);
+    } catch (error) {
+      if (isAbortError(error) || !isCurrent()) return;
+      location.assign(url);
+      return;
+    }
+    if (!isCurrent()) return;
+    applyFragment(result, url, historyMode);
+  } finally {
+    if (currentNavigationAbort === abort) currentNavigationAbort = null;
   }
-  applyFragment(result, url, historyMode);
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
 }
 
 function eligibleForPrefetch(link: HTMLAnchorElement): URL | null {
@@ -452,6 +493,12 @@ document.addEventListener("click", (event) => {
   if (!link || link.target || link.download || link.hasAttribute("data-brandy-reload")) return;
   const url = new URL(link.href, location.href);
   if (!internal(url)) return;
+  // Same-document hash links (e.g. <a href="#section"> or <a href="/current-page#section">)
+  // are left to native browser handling: no fetch, no pushState, just the built-in scroll-to-
+  // fragment behavior. Intercepting these would fetch a redundant fragment and pushState would
+  // drop the hash entirely (finalURL only ever carries pathname+search), so the browser would
+  // never scroll to the anchor.
+  if (url.hash && url.pathname === location.pathname && url.search === location.search) return;
   event.preventDefault();
   // Passing init (even just to carry a header) also disables cache-hit reuse for this click,
   // which is correct: a prefetch issued without this intent could be the wrong (intercepted) variant.

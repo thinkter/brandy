@@ -279,6 +279,45 @@ describe("intercept navigation", () => {
     const [, init] = fetchMock.mock.calls[0] as [URL, RequestInit];
     expect((init.headers as Record<string, string>)["x-brandy-no-intercept"]).toBe("1");
   });
+
+  // -------------------------------------------------------------------------
+  // Issue #4 — in-page anchor links must not be intercepted
+  // -------------------------------------------------------------------------
+
+  test("clicking a bare hash link (#section) does not fetch", async () => {
+    const fetchMock = setFragmentFetch("<p>content</p>");
+    const link = sharedWin.document.createElement("a");
+    link.href = "#section";
+    sharedWin.document.body.appendChild(link);
+
+    await click(link, sharedWin);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  test("clicking a link to the same pathname+search with a hash does not fetch", async () => {
+    const fetchMock = setFragmentFetch("<p>content</p>");
+    // beforeEach pushed /start — an href resolving to the same pathname+search plus a hash
+    // should be treated as same-document and left to native handling.
+    const link = sharedWin.document.createElement("a");
+    link.href = "http://localhost/start#section";
+    sharedWin.document.body.appendChild(link);
+
+    await click(link, sharedWin);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  test("clicking a hash link to a DIFFERENT pathname still fetches (not same-document)", async () => {
+    const fetchMock = setFragmentFetch("<p>content</p>");
+    const link = sharedWin.document.createElement("a");
+    link.href = "http://localhost/elsewhere#section";
+    sharedWin.document.body.appendChild(link);
+
+    await click(link, sharedWin);
+
+    expect(fetchMock).toHaveBeenCalled();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -678,5 +717,139 @@ describe("history handling", () => {
     await new Promise<void>((r) => setTimeout(r, 30));
 
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Suite 7 – Issue #5: latest-wins navigation guard + fetch abort
+// ---------------------------------------------------------------------------
+
+describe("latest-wins navigation guard", () => {
+  beforeEach(() => {
+    sharedWin.document.body.innerHTML = `<div id="main"><p>initial</p></div>`;
+    sharedWin.history.pushState({}, "", "/race-start");
+  });
+
+  /**
+   * Installs a fetch mock where each call's response is controlled externally: the call
+   * immediately registers a deferred entry (with the AbortSignal it was given) and the test
+   * later decides when/whether each one resolves, so responses can be made to land out of order.
+   */
+  function setDeferredFetch() {
+    const deferred: Array<{
+      url: URL;
+      signal: AbortSignal | undefined;
+      resolve: (html: string) => void;
+      aborted: boolean;
+    }> = [];
+    const fetchMock = mock((url: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      const entry = {
+        url: url as URL,
+        signal: init?.signal ?? undefined,
+        resolve: undefined as unknown as (html: string) => void,
+        aborted: false,
+      };
+      init?.signal?.addEventListener("abort", () => { entry.aborted = true; });
+      const promise = new Promise<Response>((resolve, reject) => {
+        entry.resolve = (html: string) => resolve(new Response(html, {
+          status: 200,
+          headers: { "x-brandy-retarget": "#main", "x-brandy-reswap": "innerHTML" },
+        }));
+        init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+      });
+      deferred.push(entry);
+      return promise;
+    });
+    (globalThis as Record<string, unknown>)["fetch"] = fetchMock;
+    return { fetchMock, deferred };
+  }
+
+  test("an out-of-order (slower) earlier response does not clobber a later navigation", async () => {
+    const { deferred } = setDeferredFetch();
+
+    const linkA = sharedWin.document.createElement("a");
+    linkA.href = "http://localhost/response-a";
+    sharedWin.document.body.appendChild(linkA);
+    const linkB = sharedWin.document.createElement("a");
+    linkB.href = "http://localhost/response-b";
+    sharedWin.document.body.appendChild(linkB);
+
+    // Fire navigation A, then (before it resolves) navigation B.
+    linkA.dispatchEvent(new sharedWin.MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
+    await new Promise<void>((r) => setTimeout(r, 5));
+    linkB.dispatchEvent(new sharedWin.MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
+    await new Promise<void>((r) => setTimeout(r, 5));
+
+    expect(deferred.length).toBe(2);
+
+    // B (the newer, current navigation) resolves first.
+    deferred[1]!.resolve("<p>content B</p>");
+    await new Promise<void>((r) => setTimeout(r, 20));
+
+    expect(sharedWin.document.getElementById("main")!.innerHTML).toContain("content B");
+    expect(sharedWin.location.pathname).toBe("/response-b");
+
+    // A (the stale, superseded navigation) resolves late — it must be ignored entirely.
+    deferred[0]!.resolve("<p>content A</p>");
+    await new Promise<void>((r) => setTimeout(r, 20));
+
+    expect(sharedWin.document.getElementById("main")!.innerHTML).toContain("content B");
+    expect(sharedWin.document.getElementById("main")!.innerHTML).not.toContain("content A");
+    expect(sharedWin.location.pathname).toBe("/response-b");
+  });
+
+  test("a new click aborts the previous in-flight fetch", async () => {
+    const { deferred } = setDeferredFetch();
+
+    const linkA = sharedWin.document.createElement("a");
+    linkA.href = "http://localhost/abort-a";
+    sharedWin.document.body.appendChild(linkA);
+    const linkB = sharedWin.document.createElement("a");
+    linkB.href = "http://localhost/abort-b";
+    sharedWin.document.body.appendChild(linkB);
+
+    linkA.dispatchEvent(new sharedWin.MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
+    await new Promise<void>((r) => setTimeout(r, 5));
+    linkB.dispatchEvent(new sharedWin.MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
+    await new Promise<void>((r) => setTimeout(r, 5));
+
+    expect(deferred.length).toBe(2);
+    expect(deferred[0]!.aborted).toBe(true);
+    expect(deferred[0]!.signal?.aborted).toBe(true);
+    expect(deferred[1]!.aborted).toBe(false);
+
+    deferred[1]!.resolve("<p>content B</p>");
+    await new Promise<void>((r) => setTimeout(r, 20));
+    expect(sharedWin.document.getElementById("main")!.innerHTML).toContain("content B");
+  });
+
+  test("an aborted navigation does not fall back to location.assign", async () => {
+    const { deferred } = setDeferredFetch();
+    const originalAssign = sharedWin.location.assign.bind(sharedWin.location);
+    const assignMock = mock((..._args: unknown[]) => {});
+    (sharedWin.location as unknown as { assign: typeof assignMock }).assign = assignMock;
+
+    try {
+      const linkA = sharedWin.document.createElement("a");
+      linkA.href = "http://localhost/no-fallback-a";
+      sharedWin.document.body.appendChild(linkA);
+      const linkB = sharedWin.document.createElement("a");
+      linkB.href = "http://localhost/no-fallback-b";
+      sharedWin.document.body.appendChild(linkB);
+
+      linkA.dispatchEvent(new sharedWin.MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
+      await new Promise<void>((r) => setTimeout(r, 5));
+      linkB.dispatchEvent(new sharedWin.MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
+      await new Promise<void>((r) => setTimeout(r, 30));
+
+      deferred[1]!.resolve("<p>content B</p>");
+      await new Promise<void>((r) => setTimeout(r, 20));
+
+      // The aborted first fetch's rejection must be swallowed silently — no location.assign
+      // fallback should ever fire for it (that would incorrectly hard-navigate the page).
+      expect(assignMock).not.toHaveBeenCalled();
+    } finally {
+      (sharedWin.location as unknown as { assign: typeof originalAssign }).assign = originalAssign;
+    }
   });
 });
