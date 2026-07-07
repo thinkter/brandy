@@ -2,7 +2,7 @@ import type {} from "./alpine-jsx.d.ts";
 import { applyRenderSnapshot, createMemoryRenderCache, renderFragmentMatchCached, renderFragmentMatchFresh, renderFullMatchCached } from "./core/cache.ts";
 import type { RenderCache, RenderCacheEntry } from "./core/cache.ts";
 import { isRevalidation } from "./core/control.ts";
-import { diffLayoutChains, matchRoute, RouteNotFoundError } from "./core/diff.ts";
+import { diffLayoutChains, MalformedPathError, matchRoute, RouteNotFoundError } from "./core/diff.ts";
 import { hasElementAttribute, insertBeforeClosingTag } from "./core/html.ts";
 import { escapeAttribute, normalizePathname, slotId } from "./core/path.ts";
 import { injectMetadata, metadataSwap, renderFragmentMatch, streamSwap } from "./core/render.ts";
@@ -94,7 +94,15 @@ export class BrandyApplication {
     }
     const pathname = url.pathname;
     const route = this.routes.find((candidate) => candidate.method === request.method && routeMatches(candidate.path, pathname));
-    return route ? responseFrom(route.handler({ request })) : this.fallback(request);
+    try {
+      return await (route ? responseFrom(route.handler({ request })) : this.fallback(request));
+    } catch (error) {
+      // Malformed percent-encoding (e.g. a lone "%") in the pathname is caller
+      // error, not a server fault — respond 400 instead of letting it surface
+      // as an uncaught 500. See MalformedPathError in src/core/diff.ts.
+      if (error instanceof MalformedPathError) return new Response("Bad Request", { status: 400 });
+      throw error;
+    }
   }
 
   readonly fetch = (request: Request): Promise<Response> => this.handle(request);

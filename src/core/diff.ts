@@ -9,6 +9,18 @@ export class RouteNotFoundError extends Error {
   }
 }
 
+/** Thrown when a path segment contains malformed percent-encoding (e.g. a lone
+ * `%`) and cannot be decoded. Callers that sit at the edge of the process
+ * (see resolveMatch in src/server.ts) should catch this and respond 400 —
+ * it is caller error, not a server fault, so it must never surface as a 500. */
+export class MalformedPathError extends Error {
+  readonly name = "MalformedPathError";
+
+  constructor(readonly pathname: string) {
+    super(`Malformed percent-encoding in ${pathname}`);
+  }
+}
+
 function matches(route: Route, pathname: string): boolean {
   const parts = pathname === "/" ? [] : pathname.slice(1).split("/");
   if (parts.length !== route.segments.length) return false;
@@ -17,11 +29,19 @@ function matches(route: Route, pathname: string): boolean {
   );
 }
 
+/** Decodes each dynamic segment exactly once. `pathname` here is the raw,
+ * still-percent-encoded string produced by normalizePathname — this is the
+ * only place in the request pipeline that ever calls decodeURIComponent, so a
+ * value can't be decoded twice (which would let something like `%2541` slip
+ * past a filter as `%41` after a first pass and `A` after a second). */
 function paramsFor(route: Route, pathname: string): Record<string, string> {
   const parts = pathname === "/" ? [] : pathname.slice(1).split("/");
   return Object.fromEntries(route.segments.flatMap((segment, index) => {
     if (!segment.startsWith("[") || !segment.endsWith("]")) return [];
-    return [[segment.slice(1, -1), decodeURIComponent(parts[index]!)]];
+    let decoded: string;
+    try { decoded = decodeURIComponent(parts[index]!); }
+    catch { throw new MalformedPathError(pathname); }
+    return [[segment.slice(1, -1), decoded]];
   }));
 }
 

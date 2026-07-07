@@ -1,8 +1,13 @@
+/** Normalizes a pathname for route matching. Operates on the raw (still
+ * percent-encoded) pathname — it must never decode. Decoding a param segment
+ * is `paramsFor`'s job (see src/core/diff.ts), and it happens exactly once,
+ * there, so that route matching sees the same bytes for every request and a
+ * value like `%2541` can't sneak past a filter by being decoded twice. */
 export function normalizePathname(input: string): string {
   const pathname = new URL(input, "http://brandy.local").pathname;
-  const decoded = decodeURI(pathname).replace(/\/{2,}/g, "/");
-  if (decoded === "/") return "/";
-  return decoded.replace(/\/+$/, "") || "/";
+  const collapsed = pathname.replace(/\/{2,}/g, "/");
+  if (collapsed === "/") return "/";
+  return collapsed.replace(/\/+$/, "") || "/";
 }
 
 export function routePattern(segments: string[]): string {
