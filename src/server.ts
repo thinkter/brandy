@@ -333,7 +333,9 @@ export async function createBrandy(options: BrandyOptions): Promise<BrandyApplic
         return new Response(`${rendered.html}${metadataSwap(rendered.metadata, "merge")}`, { status: rendered.status, headers });
       }
 
-      const refresh = request.headers.get(REFRESH_BOUNDARY_HEADER);
+      // Dev-only: lets the HMR client steer which layout boundary re-renders from. Ignored in
+      // production so external clients can't use it to control the render chain.
+      const refresh = options.dev ? request.headers.get(REFRESH_BOUNDARY_HEADER) : null;
       let diff = diffLayoutChains(current, targetResult.match);
       if (refresh) {
         const index = targetResult.match.route.layouts.findIndex((layout) => layout.id === refresh);
