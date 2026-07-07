@@ -137,6 +137,9 @@ test("public assets stay contained within publicDir", async () => {
     const traversal = await app.handle(new Request("http://localhost/%2e%2e%2fsecret.txt"));
     expect(traversal.status).toBe(404);
     expect(await traversal.text()).not.toContain("private sibling file");
+
+    const malformed = await app.handle(new Request("http://localhost/%"));
+    expect(malformed.status).toBe(404);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
