@@ -5,16 +5,16 @@
 - [x] Design explicit client/server boundaries and per-island runtime delivery.
   Server-rendered TSX should remain the default, and completely static routes should not download Alpine. Add an explicit opt-in boundary, inspired by Astro islands and Next.js `"use client"`, so an interactive component can request its client runtime without making the rest of the page hydratable. Keep Brandy's navigation runtime independently configurable, define how island state behaves across fragment swaps, and evaluate whether the first version should initialize Alpine islands only or also support true component hydration.
 
-- [x] Avoid mutating shared action-handler function objects in `loadActions` ([`src/core/walker.ts`](/home/ashman/Documents/opensource/brandy/src/core/walker.ts)).
+- [x] Avoid mutating shared action-handler function objects in `loadActions` ([`src/core/walker.ts`](../src/core/walker.ts)).
   `@kitajs/html` stringifies attribute values with a bare `value.toString()`, and app code imports that JSX runtime directly, so Brandy has no render-layer hook to intercept — overriding `toString` on the handler itself is unavoidable. Added a module-level `WeakMap<Function, string>` (`actionPathsByHandler`) that records the path each handler is bound to: repeat binds to the same path (e.g. every dev rebuild re-touching the un-versioned canonical import) are now a no-op instead of a redundant mutation, and two different routes ever resolving to the same handler identity now throw instead of one path silently overwriting the other.
 
-- [x] Replace HTML shell injection string replacement with a structural approach in [`src/core/render.ts`](/home/ashman/Documents/opensource/brandy/src/core/render.ts) and [`src/server.ts`](/home/ashman/Documents/opensource/brandy/src/server.ts).
-  Shell insertion, duplicate-asset detection, and streaming document splitting now use a small HTML-aware scanner in [`src/core/html.ts`](/home/ashman/Documents/opensource/brandy/src/core/html.ts). It recognizes real tags and attributes while ignoring misleading closing-tag text inside comments, quoted attributes, and raw-text elements such as scripts and styles.
+- [x] Replace HTML shell injection string replacement with a structural approach in [`src/core/render.ts`](../src/core/render.ts) and [`src/server.ts`](../src/server.ts).
+  Shell insertion, duplicate-asset detection, and streaming document splitting now use a small HTML-aware scanner in [`src/core/html.ts`](../src/core/html.ts). It recognizes real tags and attributes while ignoring misleading closing-tag text inside comments, quoted attributes, and raw-text elements such as scripts and styles.
 
-- [ ] Keep `REFRESH_BOUNDARY_HEADER` internal-only and document the constraint in [`src/server.ts`](/home/ashman/Documents/opensource/brandy/src/server.ts).
-  This is currently a dev-HMR escape hatch that bypasses the diff engine's computed refresh boundary. That is acceptable as an internal mechanism, but it should not drift into a public or semi-public targeting API, especially for future features like intercepting routes.
+- [x] Keep `REFRESH_BOUNDARY_HEADER` internal-only and document the constraint in [`src/server.ts`](../src/server.ts).
+  Done in PR #46 (issue #7): the header is now only honored when `options.dev` is set — production treats it as absent, so it cannot drift into a public or semi-public targeting API. The constraint is documented at the read site.
 
-- [ ] Add a production-quality dev safeguard for repeated full rebuilds and cache-busted dynamic imports in [`src/dev.ts`](/home/ashman/Documents/opensource/brandy/src/dev.ts).
+- [ ] Add a production-quality dev safeguard for repeated full rebuilds and cache-busted dynamic imports in [`src/dev.ts`](../src/dev.ts).
   Every save rebuilds the route manifest from scratch and re-imports modules with a fresh cache-busting query string. Over a long Bun dev session, old module generations can accumulate in memory. Not urgent for short sessions, but worth guarding before long-lived development workflows rely on it.
 
 ## Feature roadmap
@@ -45,7 +45,7 @@
   Allow independently rendered server content to stream into a cached or already-rendered shell with a fallback. Define cold-load, partial-navigation, failure, metadata, and no-JavaScript behavior before exposing the API.
 
 - [ ] Make prefetching cancellable, bounded, and aware of navigation conditions.
-  Add `AbortController`, cache expiry and size limits, and avoid waste on constrained connections or abandoned hover targets. Preserve the invariant that a prefetched fragment is valid only for the route tree from which it was requested.
+  Add `AbortController`, cache expiry and size limits, and avoid waste on constrained connections or abandoned hover targets. Preserve the invariant that a prefetched fragment is valid only for the route tree from which it was requested. *Partially done:* the prefetch cache gained TTL + LRU bounds (PR #41) and navigations themselves are now abortable with a latest-wins token (PR #48); still open are aborting the prefetch fetch itself on abandoned hover and connection-awareness (`Save-Data`, effective connection type).
 
 ### Scale dependent
 

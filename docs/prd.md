@@ -1,7 +1,7 @@
 # Brandy — Product Requirements Document
 
-**Status:** Draft v0.2
-**Last updated:** 2026-07-02
+**Status:** Draft v0.3
+**Last updated:** 2026-07-07
 **Owner:** @thinkter
 **One-liner:** Next.js App Router conventions, delivered as HTML over the wire — no React, no RSC.
 
@@ -197,9 +197,9 @@ The framework sees the `action` reference, generates the POST route, and wires t
 - **Back-button correctness.** History over partial navigation is the sharpest technical edge; getting it wrong produces mysterious bugs.
 - **"Files, no plumbing" only holds for navigation/data.** The moment a developer needs client interactivity, attributes (plumbing) reappear via the adopted library — and Brandy itself now ships three per-element escape hatches (`data-brandy-reload`, `data-brandy-no-prefetch`, `data-brandy-no-intercept`). The promise must be scoped honestly in docs.
 - **Dependency swap cost (D3).** Keep the seam (D2) clean so opting out of Alpine or adopting another client-state library remains practical as features grow.
-- **Caching vs. personalization.** `prerender`/`revalidate` cache whole documents including ancestor layouts, and loaders receive the full `Request`. Until Brandy detects dynamic request usage, a cached route that reads cookies or auth headers serves one user's page to everyone. The target user builds logged-in dashboards, so specifying this boundary precisely is itself a differentiator, not just a bug to fix (tracked in GitHub issues).
-- **Streaming punches a hole in the no-JS guarantee.** Deferred `loading.tsx` content arrives as script-applied swaps; a no-JS cold load shows the skeleton forever. This must become either a documented, scoped exception to principle 4 or a solved problem — not an unstated surprise.
-- **Auth story is undefined.** Loaders cannot redirect and there is no middleware concept, so "unauthenticated → /login" — the first need of the target user — has no supported path yet (tracked in GitHub issues).
+- **Caching vs. personalization.** `prerender`/`revalidate` cache whole documents including ancestor layouts, and loaders receive the full `Request`. Until Brandy detects dynamic request usage, a cached route that reads cookies or auth headers serves one user's page to everyone. The target user builds logged-in dashboards, so specifying this boundary precisely is itself a differentiator, not just a bug to fix. **Open — issue #1, the last serious audit item alongside #6; design discussion pending.**
+- **Streaming punches a hole in the no-JS guarantee.** Deferred `loading.tsx` content arrives as script-applied swaps; a no-JS cold load shows the skeleton forever. This must become either a documented, scoped exception to principle 4 or a solved problem — not an unstated surprise. **Open — issue #6; the decision (stream real HTML chunks vs. document a scoped JS-required exception) is the next design discussion.**
+- **Auth story is partially defined.** Loaders can now redirect via the `redirect()` helper (issue #15, shipped), covering "unauthenticated → /login" per route. A middleware concept for cross-cutting auth remains future work.
 
 ## 13. Milestones / Roadmap
 
