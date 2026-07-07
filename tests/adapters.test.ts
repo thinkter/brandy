@@ -107,12 +107,16 @@ test("Cloudflare output is a fetch worker with static assets and immutable prere
   expect(await readFile(join(output, "worker.js"), "utf8")).not.toMatch(/\b(?:eval|Function)\s*\(/);
   const env = { ASSETS: assetBinding(join(output, "assets")) };
   const hard = await worker.fetch(new Request("http://localhost/"), env, {});
-  expect(hard.headers.get("cache-control")).toBe("public, max-age=31536000, immutable");
+  expect(hard.headers.get("cache-control")).toBe("public, max-age=0, must-revalidate");
   expect(await hard.text()).toContain("portable");
   const partial = await worker.fetch(new Request("http://localhost/", { headers: {
     "x-brandy-navigation": "1", "x-brandy-current-url": "/",
   }}), env, {});
   expect(await partial.text()).toContain("portable");
+
+  const metadata = JSON.parse(await readFile(join(output, "build.json"), "utf8"));
+  const runtimeAsset = await worker.fetch(new Request(`http://localhost${metadata.assets.runtime}`), env, {});
+  expect(runtimeAsset.headers.get("cache-control")).toBe("public, max-age=31536000, immutable");
 });
 
 test("Vercel emits Node and Edge Build Output API functions", async () => {
@@ -125,8 +129,18 @@ test("Vercel emits Node and Edge Build Output API functions", async () => {
     const deployment = JSON.parse(await readFile(join(output, "config.json"), "utf8"));
     const functionConfig = JSON.parse(await readFile(join(output, "functions/index.func/.vc-config.json"), "utf8"));
     expect(deployment.version).toBe(3);
+    // Prerendered page HTML is served at a stable, user-facing URL — it must revalidate on every
+    // request so a redeploy reaches returning visitors, not be cached for a year like an asset.
     expect(deployment.routes.some((route: { dest?: string; headers?: Record<string, string> }) =>
-      route.dest?.startsWith("/_brandy/pages/") && route.headers?.["cache-control"]?.includes("immutable")
+      route.dest?.startsWith("/_brandy/pages/") && route.headers?.["cache-control"] === "public, max-age=0, must-revalidate"
+    )).toBe(true);
+    expect(deployment.routes.every((route: { dest?: string; headers?: Record<string, string> }) =>
+      !(route.dest?.startsWith("/_brandy/pages/") && route.headers?.["cache-control"]?.includes("immutable"))
+    )).toBe(true);
+    // Fingerprinted framework assets (runtime/app/alpine bundles) are content-addressed and safe
+    // to cache forever.
+    expect(deployment.routes.some((route: { src?: string; headers?: Record<string, string> }) =>
+      route.src === "/_brandy/(?!pages/).*" && route.headers?.["cache-control"] === "public, max-age=31536000, immutable"
     )).toBe(true);
     expect(functionConfig.runtime).toBe(runtime === "edge" ? "edge" : "nodejs22.x");
     expect(await Bun.file(join(output, "static/hello.txt")).text()).toBe("hello");

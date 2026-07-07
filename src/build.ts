@@ -47,6 +47,13 @@ function isFingerprintedPublicAsset(path: string): boolean {
   return /(?:^|[._-])[a-f0-9]{8,64}(?=\.[^/]+$)/i.test(path);
 }
 
+// Fingerprinted assets (runtime/app/alpine bundles, hashed public files) are content-addressed:
+// their URL changes whenever the content does, so it's safe to cache them forever.
+const IMMUTABLE_ASSET_CACHE_CONTROL = "public, max-age=31536000, immutable";
+// Prerendered page HTML is served at a stable, user-facing URL. Redeploys must reach returning
+// visitors, so browsers/CDNs must revalidate instead of trusting a long max-age blindly.
+const REVALIDATE_PAGE_CACHE_CONTROL = "public, max-age=0, must-revalidate";
+
 async function nearest(directory: string, appDir: string, names: string[]): Promise<string | undefined> {
   let current = directory;
   while (current.startsWith(appDir)) {
@@ -291,7 +298,7 @@ const app=await createBrandy({${appOptions}});
 const staticAssets=new Set(${JSON.stringify([...publicAssetPaths, ...frameworkPaths])});
 const immutablePublicAssets=new Set(${JSON.stringify(fingerprintedPublicAssetPaths)});
 const publicRoot=${JSON.stringify(staticDir)};
-const server=Bun.serve({port:Number(process.env.PORT)||${config.port},hostname:process.env.HOST||${JSON.stringify(config.host)},async fetch(request){const url=new URL(request.url);if((request.method==="GET"||request.method==="HEAD")&&request.headers.get("x-brandy-navigation")!=="1"){const path=staticAssets.has(url.pathname)?url.pathname:undefined;if(path){const file=Bun.file(publicRoot+path);if(await file.exists()){const immutable=path.startsWith("/_brandy/")||immutablePublicAssets.has(path);const headers={"cache-control":immutable?"public, max-age=31536000, immutable":"public, max-age=3600"};return new Response(request.method==="HEAD"?null:file,{headers});}}}return app.handle(request);}});
+const server=Bun.serve({port:Number(process.env.PORT)||${config.port},hostname:process.env.HOST||${JSON.stringify(config.host)},async fetch(request){const url=new URL(request.url);if((request.method==="GET"||request.method==="HEAD")&&request.headers.get("x-brandy-navigation")!=="1"){const path=staticAssets.has(url.pathname)?url.pathname:undefined;if(path){const file=Bun.file(publicRoot+path);if(await file.exists()){const isPageDocument=path.startsWith(${JSON.stringify("/_brandy/pages/")});const immutable=!isPageDocument&&(path.startsWith("/_brandy/")||immutablePublicAssets.has(path));const headers={"cache-control":isPageDocument?${JSON.stringify(REVALIDATE_PAGE_CACHE_CONTROL)}:immutable?${JSON.stringify(IMMUTABLE_ASSET_CACHE_CONTROL)}:"public, max-age=3600"};return new Response(request.method==="HEAD"?null:file,{headers});}}}return app.handle(request);}});
 console.log(\`Brandy listening at \${server.url}\`);
 `;
     await bundleSource(source, join(output, "server.js"), "bun");
@@ -309,7 +316,7 @@ console.log(\`Brandy listening at \${server.url}\`);
 const app=await createBrandy({${appOptions}});
 const staticRoutes=${JSON.stringify(staticOutput.routes)};
 const staticAssets=new Set(${JSON.stringify([...publicAssetPaths, ...frameworkPaths])});
-export default {async fetch(request,env){const url=new URL(request.url);if((request.method==="GET"||request.method==="HEAD")&&request.headers.get("x-brandy-navigation")!=="1"){const path=staticRoutes[url.pathname]??(staticAssets.has(url.pathname)?url.pathname:undefined);if(path){const assetRequest=new Request(new URL(path,request.url),request);const response=await env.ASSETS.fetch(assetRequest);if(path.startsWith("/_brandy/")){const headers=new Headers(response.headers);headers.set("cache-control","public, max-age=31536000, immutable");return new Response(response.body,{status:response.status,headers});}return response;}}return app.fetch(request);}};
+export default {async fetch(request,env){const url=new URL(request.url);if((request.method==="GET"||request.method==="HEAD")&&request.headers.get("x-brandy-navigation")!=="1"){const pageDocument=staticRoutes[url.pathname];const path=pageDocument??(staticAssets.has(url.pathname)?url.pathname:undefined);if(path){const assetRequest=new Request(new URL(path,request.url),request);const response=await env.ASSETS.fetch(assetRequest);if(pageDocument){const headers=new Headers(response.headers);headers.set("cache-control",${JSON.stringify(REVALIDATE_PAGE_CACHE_CONTROL)});return new Response(response.body,{status:response.status,headers});}if(path.startsWith("/_brandy/")){const headers=new Headers(response.headers);headers.set("cache-control",${JSON.stringify(IMMUTABLE_ASSET_CACHE_CONTROL)});return new Response(response.body,{status:response.status,headers});}return response;}}return app.fetch(request);}};
 `;
     try {
       await bundleSource(source, join(output, "worker.js"), "browser", true);
@@ -348,10 +355,10 @@ export default {fetch(request){return app.fetch(request);}};
   await Bun.write(join(functionDir, ".vc-config.json"), JSON.stringify(functionConfig, null, 2));
   const routesConfig: Array<Record<string, unknown>> = [
     { src: "/.*", has: [{ type: "header", key: "x-brandy-navigation", value: "1" }], dest: "/index" },
-    { src: "/_brandy/.*", headers: { "cache-control": "public, max-age=31536000, immutable" }, continue: true },
+    { src: "/_brandy/(?!pages/).*", headers: { "cache-control": IMMUTABLE_ASSET_CACHE_CONTROL }, continue: true },
     ...Object.entries(staticOutput.routes).map(([path, destination]) => ({
       src: `^${path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, dest: destination,
-      headers: { "cache-control": "public, max-age=31536000, immutable" },
+      headers: { "cache-control": REVALIDATE_PAGE_CACHE_CONTROL },
     })),
     { handle: "filesystem" },
     { src: "/.*", dest: "/index" },
