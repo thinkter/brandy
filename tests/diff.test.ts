@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Html } from "@elysiajs/html";
-import { diffRoutes, matchRoute, normalizePathname, RouteNotFoundError, slotId, type LayoutNode, type Route, type RouteManifest } from "brandy";
+import { diffRoutes, MalformedPathError, matchRoute, normalizePathname, RouteNotFoundError, slotId, type LayoutNode, type Route, type RouteManifest } from "brandy";
 
 const renderLayout = ({ children }: { children: JSX.Element }) => children;
 const root: LayoutNode = { id: "root", directory: "app", file: "app/layout.tsx", render: renderLayout };
@@ -30,6 +30,15 @@ const manifest: RouteManifest = {
 describe("normalizePathname", () => {
   test.each([["/", "/"], ["/dashboard/", "/dashboard"], ["https://site.test/about?x=1", "/about"]])("%s", (input, expected) => {
     expect(normalizePathname(input)).toBe(expected);
+  });
+
+  // normalizePathname must never decode: it operates on the raw pathname so that
+  // route matching and param decoding (in paramsFor) see identical bytes. Decoding
+  // here would throw on malformed input and, more subtly, would cause the params
+  // extracted downstream to be decoded twice.
+  test("never decodes and never throws on malformed percent-encoding", () => {
+    expect(normalizePathname("/%")).toBe("/%");
+    expect(normalizePathname("/users/%2541")).toBe("/users/%2541");
   });
 });
 
@@ -76,6 +85,23 @@ describe("diffRoutes", () => {
       expect(error).toBeInstanceOf(RouteNotFoundError);
       expect((error as RouteNotFoundError).pathname).toBe("/missing");
     }
+  });
+
+  test("dynamic params are decoded exactly once", () => {
+    // A literal "%41" in the URL is a doubly-encoded "A". If params were decoded
+    // twice (once in normalizePathname, once in paramsFor), this would come out
+    // as "A" instead of the correct single-decode result "%41".
+    const match = matchRoute(manifest, "/dashboard/users/%2541");
+    expect(match.params.id).toBe("%41");
+  });
+
+  test("a normally-encoded param still decodes once", () => {
+    const match = matchRoute(manifest, "/dashboard/users/%20");
+    expect(match.params.id).toBe(" ");
+  });
+
+  test("throws MalformedPathError for unparsable percent-encoding in a param segment", () => {
+    expect(() => matchRoute(manifest, "/dashboard/users/%")).toThrow(MalformedPathError);
   });
 });
 

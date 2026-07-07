@@ -14,7 +14,11 @@ function publicAssetHandler(publicDir: string | false | undefined) {
   if (!publicDir) return undefined;
   const root = resolve(publicDir);
   return async (request: Request): Promise<Response | undefined> => {
-    const pathname = decodeURIComponent(new URL(request.url).pathname);
+    // Malformed percent-encoding (e.g. a lone "%") can't name a public asset;
+    // fall through to routing, which answers 400/404 (see MalformedPathError).
+    let pathname: string;
+    try { pathname = decodeURIComponent(new URL(request.url).pathname); }
+    catch { return undefined; }
     if (pathname.startsWith("/_brandy/")) return undefined;
     const filePath = resolve(root, pathname.slice(1));
     const relativePath = relative(root, filePath);

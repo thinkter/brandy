@@ -137,6 +137,9 @@ test("public assets stay contained within publicDir", async () => {
     const traversal = await app.handle(new Request("http://localhost/%2e%2e%2fsecret.txt"));
     expect(traversal.status).toBe(404);
     expect(await traversal.text()).not.toContain("private sibling file");
+
+    const malformed = await app.handle(new Request("http://localhost/%"));
+    expect(malformed.status).toBe(404);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -263,6 +266,40 @@ test("dynamic params feed loaders and loader metadata", async () => {
   expect(response.status).toBe(200);
   expect(html).toContain("User 42");
   expect(html).toContain("<title data-brandy-metadata>User 42 · Brandy</title>");
+});
+
+test("dynamic params are decoded exactly once, not twice", async () => {
+  const app = await createBrandy({ appDir });
+  // "%2541" is a doubly-encoded "A". Decoding it exactly once (the correct
+  // behavior) yields the literal param "%41"; decoding it twice (the bug) would
+  // yield "A" instead.
+  const response = await app.handle(new Request("http://localhost/dashboard/users/%2541"));
+  expect(response.status).toBe(200);
+  const html = await response.text();
+  expect(html).toContain('params.id = "%41"');
+});
+
+test("a normally percent-encoded param still decodes to its literal value", async () => {
+  const app = await createBrandy({ appDir });
+  const response = await app.handle(new Request("http://localhost/dashboard/users/User%20A"));
+  expect(response.status).toBe(200);
+  const html = await response.text();
+  expect(html).toContain('params.id = "User A"');
+});
+
+test("malformed percent-encoding that falls on a static segment 404s, not 500", async () => {
+  // "/%" doesn't land on any dynamic param segment, so there's nothing to decode —
+  // it's simply an unmatched route. Before the fix, normalizePathname called
+  // decodeURI eagerly on every request and threw here, escaping uncaught (500).
+  const app = await createBrandy({ appDir });
+  const response = await app.handle(new Request("http://localhost/%"));
+  expect(response.status).toBe(404);
+});
+
+test("malformed percent-encoding inside a dynamic param yields 400, not an uncaught 500", async () => {
+  const app = await createBrandy({ appDir });
+  const response = await app.handle(new Request("http://localhost/dashboard/users/%"));
+  expect(response.status).toBe(400);
 });
 
 test("partial metadata is emitted out of band", async () => {
