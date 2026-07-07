@@ -143,7 +143,7 @@ test("public assets stay contained within publicDir", async () => {
 });
 
 test("development refresh can replace a nested layout boundary", async () => {
-  const app = await createBrandy({ appDir });
+  const app = await createBrandy({ appDir, dev: true });
   const response = await app.handle(new Request("http://localhost/dashboard/settings", { headers: {
     "x-brandy-navigation": "1",
     "x-brandy-current-url": "/dashboard/settings",
@@ -152,6 +152,19 @@ test("development refresh can replace a nested layout boundary", async () => {
   expect(response.headers.get("x-brandy-retarget")).toBe("#brandy-slot-root");
   const html = await response.text();
   expect(html).toContain('id="brandy-slot-dashboard"');
+  expect(html).toContain("Settings");
+});
+
+test("refresh boundary header is ignored outside of development", async () => {
+  const app = await createBrandy({ appDir });
+  const response = await app.handle(new Request("http://localhost/dashboard/settings", { headers: {
+    "x-brandy-navigation": "1",
+    "x-brandy-current-url": "/dashboard/settings",
+    "x-brandy-refresh-boundary": "dashboard",
+  }}));
+  expect(response.headers.get("x-brandy-retarget")).toBe("#brandy-slot-dashboard");
+  const html = await response.text();
+  expect(html).not.toContain('id="brandy-slot-dashboard"');
   expect(html).toContain("Settings");
 });
 
