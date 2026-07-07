@@ -72,12 +72,15 @@ function pageCacheFor(module: Partial<PageModule>, pageFile: string): PageCache 
 
 let importVersion = "";
 
-/** Tracks which action path each handler function has already been assigned, so repeated
- * manifest builds (e.g. overlapping dev rebuilds importing the same cached module) don't
- * blindly re-run `Object.defineProperty` on a shared function object, and so two different
- * routes accidentally resolving to the same handler identity fail loudly instead of one
- * path silently overwriting the other. */
-const actionPathsByHandler = new WeakMap<Function, string>();
+/** Tracks which action path each handler function has already been assigned *within the
+ * current `buildManifest` walk*, so two different routes in the same walk accidentally
+ * resolving to the same handler identity fail loudly instead of one path silently
+ * overwriting the other. Reassigned to a fresh `WeakMap` at the start of every walk (see
+ * `buildManifest`) so state never leaks across dev-server rebuilds: without that reset, a
+ * handler whose canonical module identity survives a directory rename (e.g. its
+ * `actions.ts` file moved) would still be "already bound" to its old path from a previous
+ * walk and every subsequent rebuild would throw until the process restarted. */
+let actionPathsByHandler = new WeakMap<Function, string>();
 
 /** `@kitajs/html` (the JSX runtime app code imports directly) stringifies attribute values
  * with a plain `value.toString()` call when rendering `action={handler}`. Brandy never sees
@@ -233,6 +236,7 @@ async function walkDirectory(
 
 export async function buildManifest(appDirectory: string, cacheBust?: string): Promise<RouteManifest> {
   importVersion = cacheBust ? `?brandy=${encodeURIComponent(cacheBust)}` : "";
+  actionPathsByHandler = new WeakMap();
   const appDir = resolve(appDirectory);
   const routes: Route[] = [];
   const actions = new Map<string, ActionDefinition>();
