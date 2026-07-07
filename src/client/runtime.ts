@@ -158,6 +158,18 @@ function reconcileHead(root: ParentNode): void {
 
 /** Applies every out-of-band template in a fragment: head metadata plus any deferred stream content. */
 function reconcileStream(root: ParentNode, reinitializeTargets = true): void {
+  // A deferred loader redirect that arrived after the response committed (see streamRedirect in
+  // core/render.ts). Applied first — when the destination is elsewhere, swapping stale content
+  // into this page is pointless.
+  const redirect = root.querySelector<HTMLTemplateElement>("template[data-brandy-stream-redirect]");
+  if (redirect) {
+    const destination = redirect.dataset.brandyStreamRedirect;
+    redirect.remove();
+    if (destination) {
+      location.replace(destination);
+      return;
+    }
+  }
   reconcileHead(root);
   root.querySelectorAll<HTMLTemplateElement>("template[data-brandy-stream-target]").forEach((template) => {
     const id = template.dataset.brandyStreamTarget;
@@ -201,6 +213,14 @@ window.Brandy = window.Brandy ?? {};
 window.Brandy.ensureIsland = ensureIsland;
 
 if (needsIsland(document)) void ensureAlpine();
+
+// Boot sweep: a streamed cold load delivers its deferred content, head metadata, and mid-stream
+// redirects as the same declarative templates the fragment path uses (streamSwap/metadataSwap/
+// streamRedirect in core/render.ts) — no inline <script>. This module is type="module", so it
+// executes after the document finishes parsing, which for a streamed response means the stream
+// has closed and every deferred template is already in the DOM; one sweep applies them all.
+// Non-streamed documents contain no such templates, making this a no-op.
+reconcileStream(document);
 
 function reinitialize(root: Element): void {
   ensureIsland(root);

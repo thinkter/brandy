@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
-  memoizeLoader, renderFragmentMatch, renderFullMatch, STREAM_ERROR_MARKER,
+  memoizeLoader, redirect, renderFragmentMatch, renderFullMatch, STREAM_ERROR_MARKER,
   type LayoutNode, type PageNode, type Route, type RouteDiff, type RouteMatch,
 } from "brandy";
 import { createDevelopmentApp as createBrandy } from "brandy/build";
@@ -58,6 +58,66 @@ test("the skeleton streams before the loader resolves, real content after", asyn
   expect(document.match(/<\/body>/g)).toHaveLength(1);
   expect(document.match(/<\/html>/g)).toHaveLength(1);
   expect(document.indexOf("real data")).toBeLessThan(document.indexOf("</body>"));
+});
+
+test("cold-load deferred content is delivered as declarative templates, never inline scripts", async () => {
+  const root: LayoutNode = {
+    id: "root", directory: "/app", file: "/app/layout.tsx",
+    render: ({ children }) => `<html><body>${children}</body></html>` as JSX.Element,
+  };
+  const page: PageNode = {
+    id: "root/page", directory: "/app", file: "/app/page.tsx",
+    load: async () => "real data",
+    metadata: () => ({ title: "Deferred title" }),
+    render: ({ data }) => `<main>${data}</main>` as JSX.Element,
+    renderLoading: () => `<main>SKELETON</main>` as JSX.Element,
+  };
+  const route: Route = { id: "/", pattern: "/", segments: [], layouts: [root], page, pageFile: page.file, renderPage: page.render };
+  const match: RouteMatch = { route, pathname: "/", params: {} };
+
+  const rendered = await renderFullMatch(match, new Request("http://localhost/"));
+  if (rendered.kind !== "stream") throw new Error("expected a streaming render");
+  const document = await new Response(rendered.stream).text();
+  // The deferred content and head metadata arrive as the same declarative templates the
+  // fragment path uses — the shipped runtime applies them, so nothing here is executable
+  // and the response works under a CSP that forbids inline scripts.
+  expect(document).toContain("data-brandy-stream-target");
+  expect(document).toContain("data-brandy-head");
+  expect(document).toContain("Deferred title");
+  expect(document).not.toContain("<script");
+});
+
+test("a deferred loader redirect emits a declarative redirect template in both modes", async () => {
+  function redirectingRoute(): { match: RouteMatch; route: Route; root: LayoutNode } {
+    const root: LayoutNode = {
+      id: "root", directory: "/app", file: "/app/layout.tsx",
+      render: ({ children }) => `<html><body>${children}</body></html>` as JSX.Element,
+    };
+    const page: PageNode = {
+      id: "root/page", directory: "/app", file: "/app/page.tsx",
+      load: async () => { await Bun.sleep(1); return redirect("/login"); },
+      render: ({ data }) => `<main>${data}</main>` as JSX.Element,
+      renderLoading: () => `<main>SKELETON</main>` as JSX.Element,
+    };
+    const route: Route = { id: "/", pattern: "/", segments: [], layouts: [root], page, pageFile: page.file, renderPage: page.render };
+    return { root, route, match: { route, pathname: "/", params: {} } };
+  }
+
+  const full = redirectingRoute();
+  const documentRendered = await renderFullMatch(full.match, new Request("http://localhost/"));
+  if (documentRendered.kind !== "stream") throw new Error("expected a streaming render");
+  const document = await new Response(documentRendered.stream).text();
+  expect(document).toContain('data-brandy-stream-redirect="/login"');
+  expect(document).toContain("</body></html>");
+  expect(document).not.toContain("<script");
+
+  const fragment = redirectingRoute();
+  const diff: RouteDiff = { current: fragment.match, target: fragment.match, boundary: fragment.root, chainToRender: [] };
+  const fragmentRendered = await renderFragmentMatch(diff, new Request("http://localhost/"));
+  if (fragmentRendered.kind !== "stream") throw new Error("expected a streaming render");
+  const body = await new Response(fragmentRendered.stream).text();
+  expect(body).toContain('data-brandy-stream-redirect="/login"');
+  expect(body).not.toContain("<script");
 });
 
 test("streaming ancestor and deferred loaders share one memoization scope", async () => {
@@ -159,7 +219,8 @@ test("a streamed document replaces provisional ancestor metadata with the final 
     if (done) break;
   }
   rest += decoder.decode();
-  expect(rest).toContain('document.querySelectorAll("[data-brandy-metadata]")');
+  expect(rest).toContain("data-brandy-head");
+  expect(rest).not.toContain("<script");
   expect(rest).toContain("Resolved title");
   expect(rest).toContain("Root description");
 });
@@ -287,10 +348,14 @@ test("cold-load streaming flushes the skeleton fast, injects assets into the fir
     expect(document.match(/<\/html>/g)).toHaveLength(1);
     expect(document.indexOf("REAL-MARKER")).toBeLessThan(document.indexOf("</body>"));
 
-    // No-JS degradation: if the trailing inline script never executes, the page that was
-    // actually delivered to the browser still contains the skeleton's placeholder text
-    // (not a broken or empty document) — this is the accepted tradeoff for streaming routes.
+    // No-JS degradation: the deferred content ships as an inert declarative template, so if the
+    // runtime never executes, the delivered page still shows the skeleton's placeholder text
+    // (not a broken or empty document) — this is the documented tradeoff for streaming routes.
     expect(firstChunk + rest).toContain("SKELETON-MARKER");
+    expect(rest).toContain("data-brandy-stream-target");
+    // The tail must carry no executable content: strict CSP compatibility depends on the
+    // deferred phase being template-only (the runtime <script src> lives in the skeleton chunk).
+    expect(rest).not.toContain("<script");
 
     const production = await createBrandy({
       appDir: dir,
@@ -320,6 +385,8 @@ test("compiled client runtime understands the streaming wire format", async () =
   expect(source).toContain("brandy:stream-boundary");
   expect(source).toContain("data-brandy-stream-target");
   expect(source).toContain("brandyStreamTarget");
+  expect(source).toContain("data-brandy-stream-redirect");
+  expect(source).toContain("brandyStreamRedirect");
 });
 
 // ── Issue #12: streaming error path tests ────────────────────────────────────
