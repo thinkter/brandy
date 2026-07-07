@@ -4,6 +4,7 @@ import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import type { AdapterRuntime } from "./adapters.ts";
 import { buildManifest } from "./core/walker.ts";
 import { keyFor, type RenderCacheEntry } from "./core/cache.ts";
+import { guardPersonalizedRequest } from "./core/personalization.ts";
 import { renderFragmentMatch } from "./core/render.ts";
 import type { LayoutNode, PageNode, RouteManifest } from "./core/types.ts";
 import { compileStyles, copyDirectory, latestMtime, resetDirectory, type ResolvedConfig } from "./tooling.ts";
@@ -14,18 +15,24 @@ import { createBrandy } from "./server.ts";
  * `[id]` segments) that declared `prerender`/`revalidate`, so the very first production request
  * doesn't pay a cold-cache miss. Routes with dynamic segments populate lazily on first request
  * instead — there's no `generateStaticParams`-equivalent, since `revalidate` is a time-based
- * primitive, not an enumeration-based one. */
+ * primitive, not an enumeration-based one.
+ *
+ * Every route reached here has `route.page.cache` set, so its render (and its ancestor layouts',
+ * which are baked into the same cached output) is guarded against reading per-user data: a
+ * cookie- or auth-header-reading loader must fail the *build* rather than silently caching an
+ * anonymous variant that gets served to every visitor in production. */
 async function warmPrerenderCache(manifest: RouteManifest): Promise<Record<string, RenderCacheEntry>> {
   const snapshot: Record<string, RenderCacheEntry> = {};
   for (const route of manifest.routes) {
     const cache = route.page.cache;
     if (!cache || route.segments.some((segment) => segment.startsWith("["))) continue;
     const match = { route, pathname: route.pattern, params: {} };
+    const request = guardPersonalizedRequest(new Request(`http://brandy.local${route.pattern}`), route.pattern);
     for (let shared = 0; shared <= route.layouts.length; shared++) {
       const chainToRender = route.layouts.slice(shared);
       // `boundary` is never read by renderFragmentMatch's implementation; any layout satisfies the type.
       const diff = { current: match, target: match, boundary: route.layouts[0]!, chainToRender };
-      const rendered = await renderFragmentMatch(diff, new Request(`http://brandy.local${route.pattern}`));
+      const rendered = await renderFragmentMatch(diff, request);
       if (rendered.kind !== "sync" || rendered.status !== 200) continue;
       const key = keyFor(route.pattern, chainToRender.length, {}, "");
       snapshot[key] = { html: rendered.html, metadata: rendered.metadata, expiresAt: cache.revalidateSeconds === null ? null : Date.now() + cache.revalidateSeconds * 1000 };
@@ -158,6 +165,7 @@ async function renderStaticDocuments(
     trustedOrigins: config.trustedOrigins,
     setup: config.setup,
     immutablePrerender: true,
+    renderCacheMaxEntries: config.renderCacheMaxEntries,
   });
   const documents: Record<string, string> = {};
   const routes: Record<string, string> = {};
@@ -273,7 +281,7 @@ ${actions.join(";\n")}
 const manifest={appDir:${JSON.stringify(config.appDir)},routes:[${routes.join(",\n")}],actions,rootNotFound:${rootNotFoundModule ? `${rootNotFoundModule}.default` : "undefined"}};
 const config=${config.configFile ? `${imported(config.configFile)}.default ?? {}` : "{}"};
 `;
-  const appOptions = `manifest,clientPath:${JSON.stringify(clientPath)},stylesheetPath:${JSON.stringify(stylesheetPath)},alpineChunkPath:${JSON.stringify(alpineChunkPath)},trustedOrigins:config.trustedOrigins,setup:config.setup,dev:false,prerenderSnapshot:${JSON.stringify(prerenderSnapshot)},immutablePrerender:${adapterRejectsMutableCache(config.adapter.runtime)}`;
+  const appOptions = `manifest,clientPath:${JSON.stringify(clientPath)},stylesheetPath:${JSON.stringify(stylesheetPath)},alpineChunkPath:${JSON.stringify(alpineChunkPath)},trustedOrigins:config.trustedOrigins,setup:config.setup,dev:false,prerenderSnapshot:${JSON.stringify(prerenderSnapshot)},immutablePrerender:${adapterRejectsMutableCache(config.adapter.runtime)},renderCacheMaxEntries:${JSON.stringify(config.renderCacheMaxEntries)}`;
   const frameworkPaths = [clientPath, stylesheetPath, alpineChunkPath].filter((path): path is string => Boolean(path));
   const publicAssetPaths = await publicPaths(config.publicDir);
   const fingerprintedPublicAssetPaths = publicAssetPaths.filter(isFingerprintedPublicAsset);

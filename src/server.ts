@@ -39,6 +39,10 @@ export interface BrandyOptions {
   immutablePrerender?: boolean;
   /** Build-time-warmed prerender cache entries, loaded at boot. See build.ts. */
   prerenderSnapshot?: Record<string, RenderCacheEntry>;
+  /** Caps the number of entries the in-memory render cache holds; the least-recently-used entry
+   * is evicted once exceeded. Defaults to `DEFAULT_RENDER_CACHE_MAX_ENTRIES`. Bounds memory
+   * against unbounded growth from unique query strings/params. */
+  renderCacheMaxEntries?: number;
 }
 
 export interface BrandyRequestContext {
@@ -221,7 +225,7 @@ function injectIntoFirstChunk(stream: ReadableStream<Uint8Array>, transform: (ht
 export async function createBrandy(options: BrandyOptions): Promise<BrandyApplication> {
   const manifest = options.manifest;
   cacheNotFoundRoute(manifest);
-  const mutableCache = createMemoryRenderCache();
+  const mutableCache = createMemoryRenderCache(options.renderCacheMaxEntries);
   const renderCache: RenderCache = options.immutablePrerender
     ? { get: mutableCache.get, set() {}, delete() {} }
     : mutableCache;
@@ -381,5 +385,6 @@ export * from "./core/diff.ts";
 export * from "./core/island.tsx";
 export { memoizeLoader } from "./core/memo.ts";
 export * from "./core/path.ts";
+export * from "./core/personalization.ts";
 export * from "./core/render.ts";
 export * from "./core/types.ts";
