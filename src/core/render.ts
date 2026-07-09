@@ -123,19 +123,13 @@ export function streamSwap(anchorId: string, html: string): string {
   return `<template data-brandy-stream-target="${escapeAttribute(anchorId)}">${html}</template>`;
 }
 
-/** Escapes "</" so a real "</script>" inside serialized content can never close the wrapping <script> tag early. */
-function inlineScript(body: string): string {
-  return `<script>${body.replace(/<\//g, "<\\/")}</script>`;
-}
-
-function inlineSwap(anchorId: string, html: string): string {
-  return inlineScript(`document.getElementById(${JSON.stringify(anchorId)}).innerHTML=${JSON.stringify(html)};`);
-}
-
-function inlineMetaSwap(metadata: Metadata): string {
-  const tags = metaTags(metadata);
-  if (!tags) return "";
-  return inlineScript(`document.querySelectorAll("[data-brandy-metadata]").forEach(node=>node.remove());document.head.insertAdjacentHTML("beforeend",${JSON.stringify(tags)});`);
+/** A declarative client-side redirect for loader redirects that arrive after the response has
+ * committed (a deferred loader redirecting mid-stream): `<template data-brandy-stream-redirect>`,
+ * applied by the client runtime via `location.replace`. Like `streamSwap`, it is plain markup —
+ * no inline `<script>` — so streamed responses carry no CSP-hostile executable content and the
+ * apply logic lives in the always-shipped external runtime. */
+export function streamRedirect(location: string): string {
+  return `<template data-brandy-stream-redirect="${escapeAttribute(location)}"></template>`;
 }
 
 function splitDocumentClosing(document: string): { shell: string; closing: string } {
@@ -240,14 +234,12 @@ async function renderPipelineStreaming(
       } catch (error) {
         if (error instanceof RedirectError) {
           // A deferred loader redirected after the skeleton shipped — headers are already
-          // committed, so emit a client-side redirect instruction instead of an HTTP redirect.
+          // committed, so emit a declarative redirect template (applied by the client runtime
+          // via location.replace) instead of an HTTP redirect.
           const location = error.response.headers.get("location") ?? "/";
-          const instruction = mode === "document"
-            ? inlineScript(`location.replace(${JSON.stringify(location)})`)
-            : inlineScript(`window.__brandyRedirect=${JSON.stringify(location)}`);
           const tail = mode === "document"
-            ? instruction + capturedDocumentClosing
-            : streamSwap(anchorId, instruction) + metadataSwap(metadata, options.metadataMode);
+            ? streamRedirect(location) + capturedDocumentClosing
+            : streamRedirect(location);
           controller.enqueue(encoder.encode(tail));
           controller.close();
           return;
@@ -257,8 +249,13 @@ async function renderPipelineStreaming(
         logStreamError("deferred", error, dev);
         html = errorFallback;
       }
+      // Both modes deliver deferred content as the same declarative templates: the always-shipped
+      // client runtime applies them (on cold loads via its boot sweep, since a module script only
+      // executes once the document — and therefore the stream — has finished). No inline <script>
+      // is emitted, so streamed documents work under a strict CSP without nonces. Without JS the
+      // templates are inert and the skeleton remains — the documented streaming trade-off.
       const tail = mode === "document"
-        ? inlineSwap(anchorId, html) + inlineMetaSwap(metadata) + capturedDocumentClosing
+        ? streamSwap(anchorId, html) + metadataSwap(metadata) + capturedDocumentClosing
         : streamSwap(anchorId, html) + metadataSwap(metadata, options.metadataMode);
       controller.enqueue(encoder.encode(tail));
       controller.close();
