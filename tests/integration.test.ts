@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createBrandy as createRuntime, redirect, revalidate, type LayoutNode, type PageNode, type Route, type ServerAction } from "brandy";
+import { createBrandy as createRuntime, PersonalizedRequestError, redirect, revalidate, type LayoutNode, type PageNode, type Route, type ServerAction } from "brandy";
 import { buildManifest, createDevelopmentApp as createBrandy } from "brandy/build";
 
 const appDir = new URL("../example/app", import.meta.url).pathname;
@@ -358,6 +358,28 @@ test("development error boundaries can render loader details", async () => {
   const response = await app.handle(new Request("http://localhost/dashboard/users/error"));
   expect(response.status).toBe(500);
   expect(await response.text()).toContain("User loader failed");
+});
+
+test("a cache-eligible route whose loader reads request.headers.get(\"cookie\") surfaces as a 500 through the normal error boundary, in prod and in dev", async () => {
+  const manifest = await buildManifest(appDir);
+  const dashboardRoute = manifest.routes.find((route) => route.pattern === "/dashboard")!;
+  dashboardRoute.page.cache = { revalidateSeconds: null };
+  dashboardRoute.page.load = ({ request }) => request.headers.get("cookie");
+
+  const prodApp = await createRuntime({ manifest });
+  const prodResponse = await prodApp.handle(new Request("http://localhost/dashboard", { headers: { cookie: "session=abc" } }));
+  expect(prodResponse.status).toBe(500);
+  const prodHtml = await prodResponse.text();
+  expect(prodHtml).toContain("Dashboard error");
+  expect(prodHtml).toContain("Something went wrong.");
+
+  const devApp = await createRuntime({ manifest, dev: true });
+  const devResponse = await devApp.handle(new Request("http://localhost/dashboard", { headers: { cookie: "session=abc" } }));
+  expect(devResponse.status).toBe(500);
+  const devHtml = await devResponse.text();
+  expect(devHtml).toContain("Dashboard error");
+  expect(devHtml).toMatch(/reads the "cookie" header/);
+  expect(devHtml).toMatch(/prerender.*revalidate/s);
 });
 
 test("unknown URLs render the explicit 404 route", async () => {

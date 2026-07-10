@@ -1,5 +1,6 @@
 import { access, mkdir, readdir, rm, stat } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
+import { DEFAULT_RENDER_CACHE_MAX_ENTRIES } from "./core/cache.ts";
 import { defaultAdapter, type BrandyConfig } from "./config.ts";
 
 export interface ResolvedConfig extends Required<Omit<BrandyConfig, "setup">> {
@@ -32,6 +33,7 @@ export async function loadConfig(root = process.cwd(), version?: string): Promis
     alpine: value.alpine ?? true, port: value.port ?? 3000, host: value.host ?? "localhost",
     trustedOrigins: value.trustedOrigins ?? [],
     adapter: value.adapter ?? defaultAdapter,
+    renderCacheMaxEntries: value.renderCacheMaxEntries ?? DEFAULT_RENDER_CACHE_MAX_ENTRIES,
     setup: value.setup, configFile,
   };
 }
